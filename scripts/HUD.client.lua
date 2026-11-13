@@ -323,19 +323,38 @@ renderComputer = function()
 			end
 		end
 	elseif currentTab == "donate" then
-		for _, key in ipairs({ "x2cash", "x2speed" }) do
+		for _, key in ipairs(Config.DonateOrder or { "x2cash", "x2speed" }) do
 			local gp = Config.GamePasses[key]
-			local c = card(compBody, Color3.fromRGB(70, 55, 20))
-			label(c, "⭐ " .. gp.name, 16, Color3.fromRGB(255, 215, 90), 20, true)
-			label(c, gp.desc, 13, COLORS.text, 16)
+			if gp then
+				local c = card(compBody, Color3.fromRGB(70, 55, 20))
+				label(c, "⭐ " .. gp.name, 16, Color3.fromRGB(255, 215, 90), 20, true)
+				label(c, gp.desc, 13, COLORS.text, 16)
+				local r = row(c, 32)
+				if player:GetAttribute("Pass_" .. key) then
+					button(r, "✔ Активно", COLORS.good, 140, 30)
+				elseif (gp.id or 0) <= 0 and not RunService:IsStudio() then
+					button(r, "Скоро", Color3.fromRGB(90, 90, 90), 140, 30)
+				else
+					button(r, "Купить", COLORS.warn, 140, 30, function()
+						shop("pass", key)
+					end)
+				end
+			end
+		end
+		for key, dp in pairs(Config.DevProducts or {}) do
+			local c = card(compBody, Color3.fromRGB(40, 60, 90))
+			label(c, "⚡ " .. dp.name, 16, Color3.fromRGB(140, 210, 255), 20, true)
+			label(c, dp.desc, 13, COLORS.text, 16)
+			local left = (player:GetAttribute("BoostUntil") or 0) - workspace:GetServerTimeNow()
+			if key == "boost30" and left > 0 then
+				label(c, "Сейчас активен, осталось ~" .. math.ceil(left / 60) .. " мин.", 13, COLORS.good, 16, true)
+			end
 			local r = row(c, 32)
-			if player:GetAttribute("Pass_" .. key) then
-				button(r, "✔ Активно", COLORS.good, 140, 30)
-			elseif (gp.id or 0) <= 0 and not game:GetService("RunService"):IsStudio() then
+			if (dp.id or 0) <= 0 and not RunService:IsStudio() then
 				button(r, "Скоро", Color3.fromRGB(90, 90, 90), 140, 30)
 			else
 				button(r, "Купить", COLORS.warn, 140, 30, function()
-					shop("pass", key)
+					shop("product", key)
 				end)
 			end
 		end
@@ -660,15 +679,21 @@ local function renderParking(data)
 	label(parkBody, "Сесть за руль и отогнать на пост:", 15, COLORS.text, 18, true)
 	for _, b in ipairs(data.bays or {}) do
 		local r = row(parkBody, 36)
-		local txt = "🚗 Пост " .. b.idx .. (b.pit and " · смотровая яма" or "") .. (b.free and "" or " — занят")
-		button(r, txt, b.free and COLORS.good or COLORS.gray, 340, 32, function()
-			if not b.free then
-				toast("Этот пост занят", "bad")
-				return
-			end
-			parkWin.Visible = false
-			ParkingEvent:FireServer("drive", data.spot, b.idx)
-		end)
+		if b.locked then
+			button(r, "🔒 Пост " .. b.idx .. " · ⭐ донат «+1 подъёмник»", Color3.fromRGB(110, 85, 30), 340, 32, function()
+				toast("Пост " .. b.idx .. " открывается в Компьютер → ⭐ Донат", "info")
+			end)
+		else
+			local txt = "🚗 Пост " .. b.idx .. (b.pit and " · смотровая яма" or "") .. (b.bonus and " · ⭐ подъёмник" or "") .. (b.free and "" or " — занят")
+			button(r, txt, b.free and COLORS.good or COLORS.gray, 340, 32, function()
+				if not b.free then
+					toast("Этот пост занят", "bad")
+					return
+				end
+				parkWin.Visible = false
+				ParkingEvent:FireServer("drive", data.spot, b.idx)
+			end)
+		end
 	end
 end
 
@@ -704,6 +729,181 @@ local function renderBank()
 		end)
 	end
 end
+
+---------------------------------------------------------------- МАСТЕРСКАЯ: НАГРАДА, ЗАДАНИЯ, РАНГ, РЕЙТИНГ, ЛИДЕРЫ
+local HttpService = game:GetService("HttpService")
+local progWin, progBody, progClose = window("Progress", "📋 Мастерская", UDim2.new(0, 460, 0, 520), UDim2.new(0.5, -230, 0.5, -260))
+progWin.Parent = gui
+progClose.MouseButton1Click:Connect(function()
+	progWin.Visible = false
+end)
+local progBtn = button(gui, "📋 Мастерская", COLORS.btn, 150, 36)
+progBtn.Position = UDim2.new(0, 322, 1, -52)
+local statusLbl = new("TextLabel", { Parent = gui, BackgroundTransparency = 1, Size = UDim2.new(0, 520, 0, 20), Position = UDim2.new(0, 14, 1, -106), Font = Enum.Font.GothamBold, TextSize = 15, TextColor3 = COLORS.text, TextStrokeTransparency = 0.5, TextXAlignment = Enum.TextXAlignment.Left, Text = "" })
+
+local function rankInfo()
+	local idx = player:GetAttribute("Rank") or 1
+	return idx, Config.Ranks[idx] or Config.Ranks[1], Config.Ranks[idx + 1]
+end
+
+local function starsText(r)
+	if not r or r <= 0 then
+		return "нет отзывов"
+	end
+	local full = math.floor(r + 0.5)
+	return string.rep("★", full) .. string.rep("☆", 5 - full) .. string.format(" %.1f", r)
+end
+
+local function questList()
+	local ok, list = pcall(function()
+		return HttpService:JSONDecode(player:GetAttribute("Quests") or "[]")
+	end)
+	return ok and list or {}
+end
+
+local function hasClaimable()
+	if player:GetAttribute("DailyReady") then
+		return true
+	end
+	for _, q in ipairs(questList()) do
+		local def = Config.QuestById[q.id]
+		if def and not q.claimed and q.n >= def.goal then
+			return true
+		end
+	end
+	return false
+end
+
+local function bar(parent, frac, color)
+	local bg = new("Frame", { Parent = parent, BackgroundColor3 = COLORS.panel, Size = UDim2.new(1, 0, 0, 10) })
+	corner(bg, 5)
+	local fg = new("Frame", { Parent = bg, BackgroundColor3 = color or COLORS.good, Size = UDim2.new(math.clamp(frac, 0, 1), 0, 1, 0) })
+	corner(fg, 5)
+	return bg
+end
+
+local function renderProgress()
+	progBtn.Text = hasClaimable() and "📋 Мастерская ❗" or "📋 Мастерская"
+	progBtn.BackgroundColor3 = hasClaimable() and COLORS.warn or COLORS.btn
+	if not progWin.Visible then
+		return
+	end
+	local y = progBody.CanvasPosition
+	clear(progBody)
+
+	-- ежедневная награда
+	local c = card(progBody, Color3.fromRGB(70, 55, 20))
+	label(c, "🎁 Ежедневная награда", 16, Color3.fromRGB(255, 215, 90), 20, true)
+	local streak = player:GetAttribute("DailyStreak") or 1
+	local cells = row(c, 34)
+	for i, amount in ipairs(Config.DailyRewards) do
+		local active = i == streak
+		local got = i < streak or (i == streak and not player:GetAttribute("DailyReady"))
+		local cell = new("TextLabel", { Parent = cells, Size = UDim2.new(0, 52, 0, 32), BackgroundColor3 = got and COLORS.good or (active and COLORS.warn or COLORS.gray), Text = "Д" .. i .. "\n$" .. amount, TextSize = 11, Font = Enum.Font.GothamBold, TextColor3 = Color3.new(1, 1, 1), LayoutOrder = i })
+		corner(cell, 6)
+	end
+	local vip = player:GetAttribute("Pass_vip") == true
+	label(c, "Заходите каждый день подряд — награда растёт." .. (vip and " ⭐ VIP: награда x" .. (Config.VipDailyMultiplier or 2) or ""), 12, COLORS.dim, 16)
+	local r = row(c, 34)
+	if player:GetAttribute("DailyReady") then
+		button(r, "Забрать (день " .. streak .. ")", COLORS.good, 200, 32, function()
+			shop("daily", "daily")
+		end)
+	else
+		button(r, "✔ Получено — приходите завтра", COLORS.gray, 260, 32)
+	end
+
+	-- задания на день
+	local qc = card(progBody)
+	label(qc, "📋 Задания на день", 16, COLORS.text, 20, true)
+	local list = questList()
+	if #list == 0 then
+		label(qc, "Задания появятся после обучения.", 13, COLORS.dim, 16)
+	end
+	for _, q in ipairs(list) do
+		local def = Config.QuestById[q.id]
+		if def then
+			local done = q.n >= def.goal
+			label(qc, (q.claimed and "✅ " or (done and "🎉 " or "• ")) .. def.text .. "  —  $" .. def.reward, 14, q.claimed and COLORS.dim or COLORS.text, 18, true)
+			bar(qc, q.n / def.goal, done and COLORS.good or COLORS.info)
+			local qr = row(qc, 30)
+			local prog = label(qr, q.n .. " / " .. def.goal, 12, COLORS.dim, 28)
+			prog.Size = UDim2.new(0, 160, 0, 28)
+			prog.AutomaticSize = Enum.AutomaticSize.None
+			prog.TextYAlignment = Enum.TextYAlignment.Center
+			if done and not q.claimed then
+				button(qr, "Забрать $" .. def.reward, COLORS.good, 150, 28, function()
+					shop("quest", q.id)
+				end)
+			end
+		end
+	end
+	label(qc, "Новые задания — каждые сутки.", 12, COLORS.dim, 16)
+
+	-- ранг и рейтинг
+	local idx, rk, nextRk = rankInfo()
+	local rc = card(progBody)
+	label(rc, "🏅 Ранг мастерской: " .. rk.name .. " (" .. idx .. "/" .. #Config.Ranks .. ")", 16, COLORS.text, 20, true)
+	label(rc, "Бонус к доходу: +" .. math.floor(rk.bonus * 100 + 0.5) .. "%", 13, COLORS.good, 16)
+	local reps = 0
+	local ls = player:FindFirstChild("leaderstats")
+	local rv = ls and ls:FindFirstChild("Ремонты")
+	if rv then
+		reps = rv.Value
+	end
+	if nextRk then
+		bar(rc, (reps - rk.repairs) / (nextRk.repairs - rk.repairs), COLORS.warn)
+		label(rc, "До ранга «" .. nextRk.name .. "»: " .. reps .. " / " .. nextRk.repairs .. " ремонтов (+" .. math.floor(nextRk.bonus * 100 + 0.5) .. "%)", 12, COLORS.dim, 16)
+	else
+		label(rc, "Максимальный ранг!", 12, COLORS.warn, 16)
+	end
+	local rating = player:GetAttribute("Rating") or 0
+	label(rc, "⭐ Рейтинг: " .. starsText(rating) .. "  (" .. (player:GetAttribute("RatingCount") or 0) .. " отзывов)", 15, Color3.fromRGB(255, 215, 90), 20, true)
+	label(rc, "Клиент снимает звёзды, если долго ждал (>" .. math.floor((Config.StarSlowTime or 240) / 60) .. " мин), за сорванный болт и за капиталку без динамометрического ключа. Высокий рейтинг = клиенты чаще, а при 4.5★+ чаевые +" .. math.floor((Config.StarTipBonus or 0.2) * 100) .. "%.", 12, COLORS.dim, 16)
+
+	-- таблица лидеров
+	local lc = card(progBody)
+	label(lc, "🏆 Таблица лидеров (ремонты)", 16, COLORS.text, 20, true)
+	local okL, rows = pcall(function()
+		return HttpService:JSONDecode(workspace:GetAttribute("Leaderboard") or "[]")
+	end)
+	if not okL or #rows == 0 then
+		label(lc, "Загрузка...", 13, COLORS.dim, 16)
+	else
+		for i, e in ipairs(rows) do
+			if i > (Config.LeaderboardSize or 10) then
+				break
+			end
+			local me = e.name == player.DisplayName
+			label(lc, (i <= 3 and ({ "🥇", "🥈", "🥉" })[i] or (i .. ".")) .. " " .. tostring(e.name) .. " — " .. tostring(e.value), 14, me and COLORS.warn or COLORS.text, 18, me)
+		end
+	end
+	progBody.CanvasPosition = y
+end
+
+progBtn.MouseButton1Click:Connect(function()
+	progWin.Visible = not progWin.Visible
+	renderProgress()
+end)
+workspace:GetAttributeChangedSignal("Leaderboard"):Connect(renderProgress)
+task.delay(3, renderProgress)
+
+-- строка статуса: ранг, звёзды, VIP, буст
+task.spawn(function()
+	while true do
+		local _, rk = rankInfo()
+		local parts = { "🏅 " .. rk.name, "⭐ " .. starsText(player:GetAttribute("Rating")) }
+		if player:GetAttribute("Pass_vip") then
+			table.insert(parts, "👑 VIP")
+		end
+		local left = (player:GetAttribute("BoostUntil") or 0) - workspace:GetServerTimeNow()
+		if left > 0 then
+			table.insert(parts, string.format("⚡ x2 %d:%02d", math.floor(left / 60), math.floor(left % 60)))
+		end
+		statusLbl.Text = table.concat(parts, "  ·  ")
+		task.wait(1)
+	end
+end)
 
 local openedAt = {}
 local function rootPos()
@@ -876,6 +1076,7 @@ local function refreshAll()
 		renderInventory()
 		renderJob()
 		renderBank()
+		renderProgress()
 	end)
 end
 player.AttributeChanged:Connect(refreshAll)

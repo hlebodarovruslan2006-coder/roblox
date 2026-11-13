@@ -56,6 +56,159 @@ local function notify(p, text, kind)
 	NotifyEvent:FireClient(p, text, kind or "info")
 end
 
+---------------------------------------------------------------- ПРОГРЕСС: РАНГ, ЗВЁЗДЫ, ЗАДАНИЯ, ЕЖЕДНЕВНАЯ НАГРАДА, БУСТ
+local HttpService = game:GetService("HttpService")
+local STARS = "Рейтинг"
+local Hooks = {} -- refreshSigns(p) задаётся ниже, когда появятся участки
+
+local function today()
+	return math.floor(os.time() / 86400)
+end
+
+local function repairsOf(p)
+	local ls = p:FindFirstChild("leaderstats")
+	local r = ls and ls:FindFirstChild(REPAIRS)
+	return r and r.Value or 0
+end
+
+local function rankOf(repairs)
+	local idx = 1
+	for i, r in ipairs(Config.Ranks) do
+		if repairs >= r.repairs then
+			idx = i
+		end
+	end
+	return idx, Config.Ranks[idx]
+end
+
+local function ratingOf(d)
+	local list = d and d.reviews
+	if not list or #list == 0 then
+		return nil
+	end
+	local s = 0
+	for _, v in ipairs(list) do
+		s = s + v
+	end
+	return s / #list
+end
+
+local function boostActive(p)
+	return (p:GetAttribute("BoostUntil") or 0) > os.time()
+end
+
+local function syncProgress(p)
+	local d = PD[p]
+	if not d then
+		return
+	end
+	local idx, rk = rankOf(repairsOf(p))
+	if d.rank and idx > d.rank then
+		notify(p, "🏅 Новый ранг мастерской: «" .. rk.name .. "»! Бонус к доходу: +" .. math.floor(rk.bonus * 100 + 0.5) .. "%", "good")
+	end
+	d.rank = idx
+	p:SetAttribute("Rank", idx)
+	local rating = ratingOf(d)
+	p:SetAttribute("Rating", rating and math.floor(rating * 10 + 0.5) / 10 or 0)
+	p:SetAttribute("RatingCount", d.reviewsTotal or 0)
+	local ls = p:FindFirstChild("leaderstats")
+	local st = ls and ls:FindFirstChild(STARS)
+	if st then
+		st.Value = rating and string.format("★%.1f", rating) or "—"
+	end
+	if Hooks.refreshSigns then
+		Hooks.refreshSigns(p)
+	end
+end
+
+local function questsSync(p)
+	local d = PD[p]
+	if d and d.quests then
+		p:SetAttribute("Quests", HttpService:JSONEncode(d.quests.list))
+	end
+end
+
+-- новые сутки: новые задания и проверка ежедневной награды
+local function ensureDaily(p)
+	local d = PD[p]
+	if not d then
+		return
+	end
+	local t = today()
+	if not d.quests or d.quests.day ~= t then
+		local pool = table.clone(Config.DailyQuests)
+		local list, used = {}, {}
+		while #list < (Config.QuestsPerDay or 3) and #pool > 0 do
+			local q = table.remove(pool, math.random(1, #pool))
+			local key = q.kind .. (q.fault or "")
+			if not used[key] then
+				used[key] = true
+				table.insert(list, { id = q.id, n = 0, claimed = false })
+			end
+		end
+		local fresh = d.quests ~= nil
+		d.quests = { day = t, list = list }
+		questsSync(p)
+		if fresh and d.tut then
+			notify(p, "📋 Новые задания на день! Кнопка «📋 Мастерская»", "info")
+		end
+	end
+	d.daily = d.daily or { day = -1, streak = 0 }
+	local ready = d.daily.day ~= t
+	local streak = d.daily.streak or 0
+	if ready then
+		streak = (d.daily.day == t - 1) and (streak % #Config.DailyRewards) + 1 or 1
+	end
+	if ready and not p:GetAttribute("DailyReady") and d.tut then
+		notify(p, "🎁 Ежедневная награда ждёт! Кнопка «📋 Мастерская»", "good")
+	end
+	p:SetAttribute("DailyReady", ready)
+	p:SetAttribute("DailyStreak", streak)
+end
+
+local function questAdd(p, kind, amount, faultId)
+	local d = PD[p]
+	if not d or not d.quests or not d.tut then
+		return
+	end
+	local changed = false
+	for _, q in ipairs(d.quests.list) do
+		local def = Config.QuestById[q.id]
+		if def and def.kind == kind and (not def.fault or def.fault == faultId) and q.n < def.goal then
+			q.n = math.min(def.goal, q.n + amount)
+			changed = true
+			if q.n >= def.goal then
+				notify(p, "📋 Задание выполнено: «" .. def.text .. "». Заберите награду в «📋 Мастерская»", "good")
+			end
+		end
+	end
+	if changed then
+		questsSync(p)
+	end
+end
+
+local function addReview(p, stars, why)
+	local d = PD[p]
+	if not d then
+		return
+	end
+	d.reviews = d.reviews or {}
+	table.insert(d.reviews, stars)
+	while #d.reviews > (Config.RatingWindow or 20) do
+		table.remove(d.reviews, 1)
+	end
+	d.reviewsTotal = (d.reviewsTotal or 0) + 1
+	local txt = "Отзыв клиента: " .. string.rep("★", stars) .. string.rep("☆", 5 - stars)
+	if why ~= "" then
+		txt = txt .. " (" .. why .. ")"
+	end
+	notify(p, txt, stars >= 4 and "good" or "bad")
+	if stars == 5 then
+		questAdd(p, "stars5", 1)
+	end
+	syncProgress(p)
+end
+
 ---------------------------------------------------------------- ДЕНЬГИ И СКЛАД
 local function cashObj(p)
 	local ls = p:FindFirstChild("leaderstats")
@@ -67,16 +220,35 @@ local function getCash(p)
 	return c and c.Value or 0
 end
 
+-- множитель доходов: x2 денег, буст, VIP, ранг мастерской
+local function incomeMult(p)
+	local m = 1
+	if p:GetAttribute("Pass_x2cash") then
+		m = m * 2
+	end
+	if boostActive(p) then
+		m = m * 2
+	end
+	if p:GetAttribute("Pass_vip") then
+		m = m * (1 + (Config.VipIncomeBonus or 0.25))
+	end
+	local _, rk = rankOf(repairsOf(p))
+	return m * (1 + (rk.bonus or 0))
+end
+
 local function addCash(p, amount, isIncome)
 	local c = cashObj(p)
 	if not c then
 		return 0
 	end
-	if isIncome and p:GetAttribute("Pass_x2cash") then
-		amount = amount * 2
+	if isIncome then
+		amount = amount * incomeMult(p)
 	end
 	amount = math.floor(amount + 0.5)
 	c.Value = c.Value + amount
+	if isIncome and amount > 0 then
+		questAdd(p, "earn", amount)
+	end
 	return amount
 end
 
@@ -276,12 +448,12 @@ end
 
 ---------------------------------------------------------------- БОКСЫ (до 4 игроков, у каждого свой)
 local PLOT_SPACING = 190
-local BAY_LX = { -35, 0, 35 }
+local BAY_LX = { -48, -16, 16, 48 } -- 4-й пост открывается донатом «+1 подъёмник»
 local BAY_LZ = -15
 -- смотровая яма (пост Config.PitBay): ширина, начало/конец по Z, глубина
 local PIT_W, PIT_Z1, PIT_Z2, PIT_D = 4.4, BAY_LZ - 9, BAY_LZ + 13, 6
 -- клиентская парковка за мастерской
-local PARK_LX = { -55, -17.5, 17.5, 55 }
+local PARK_LX = { -64, -32, 32, 64 } -- между путями выезда с постов
 local PARK_LZ = -78
 local LANE_Z = -66
 local Plots = {}
@@ -295,6 +467,24 @@ local function plotOf(p)
 		end
 	end
 	return nil
+end
+
+Hooks.refreshSigns = function(p)
+	local pl = plotOf(p)
+	if pl then
+		for _, f in ipairs(pl.nameHooks) do
+			pcall(f)
+		end
+	end
+end
+
+-- 4-й пост закрыт, пока у владельца нет доната «+1 подъёмник»
+local function bayLocked(bay)
+	if not bay.bonus then
+		return false
+	end
+	local o = bay.plot.owner
+	return not (o and o:GetAttribute("Pass_extra_lift"))
 end
 
 local function rgb(r, g, b)
@@ -1017,7 +1207,7 @@ local function buildPlot(k)
 	local forSale = P({ Name = "ForSale", Size = V(10, 4, 0.3), Position = V(-16, 9, 53.4), Color = rgb(200, 30, 30) })
 	surfaceText(forSale, Enum.NormalId.Back, "ПРОДАЁТСЯ", rgb(255, 255, 255))
 	local ownerTag = P({ Name = "OwnerTag", Size = V(1, 1, 1), Position = V(0, 31, 53), Transparency = 1, CanCollide = false })
-	local ownerLabel = label3d(ownerTag, "", 0, rgb(180, 255, 180), 300, 40)
+	local ownerLabel = label3d(ownerTag, "", 0, rgb(180, 255, 180), 360, 64)
 	plot.ownerLabel = ownerLabel
 	table.insert(plot.nameHooks, function()
 		local named = plot.shopName ~= nil
@@ -1041,8 +1231,29 @@ local function buildPlot(k)
 				d.Enabled = plot.owner == nil
 			end
 		end
-		ownerLabel.Text = plot.owner and ("Владелец: " .. plot.owner.DisplayName) or "Свободный бокс"
+		local o = plot.owner
+		if o then
+			local _, rk = rankOf(repairsOf(o))
+			local rt = o:GetAttribute("Rating") or 0
+			local vip = o:GetAttribute("Pass_vip") == true
+			ownerLabel.Text = (vip and "⭐ VIP · " or "") .. "Владелец: " .. o.DisplayName .. "\n🏅 " .. rk.name .. " · " .. (rt > 0 and string.format("★%.1f", rt) or "нет отзывов")
+			ownerLabel.TextColor3 = vip and rgb(255, 215, 90) or rgb(180, 255, 180)
+		else
+			ownerLabel.Text = "Свободный бокс"
+			ownerLabel.TextColor3 = rgb(180, 255, 180)
+		end
 	end)
+
+	-- таблица лидеров у дороги (зеркально стеле)
+	P({ Name = "LeaderPole", Size = V(1.2, 9, 1.2), Position = V(-52, 4.5, 62), Color = rgb(50, 50, 55), Material = Enum.Material.Metal })
+	local lboard = P({ Name = "LeaderBoard", Size = V(14, 12, 0.8), Position = V(-52, 15, 62), Color = rgb(25, 25, 32) })
+	plot.leaderLabels = {
+		surfaceText(lboard, Enum.NormalId.Front, "🏆 ТОП МЕХАНИКОВ", rgb(255, 215, 90), Enum.Font.GothamBold),
+		surfaceText(lboard, Enum.NormalId.Back, "🏆 ТОП МЕХАНИКОВ", rgb(255, 215, 90), Enum.Font.GothamBold),
+	}
+	for _, l in ipairs(plot.leaderLabels) do
+		l.TextXAlignment = Enum.TextXAlignment.Left
+	end
 
 
 	-- посты (подъёмники ставятся при покупке)
@@ -1081,9 +1292,11 @@ local function buildPlot(k)
 		if not isPit then
 			P({ Name = "Drain", Size = V(3, 0.08, 1), Position = lp + V(0, 0.07, 0), Color = rgb(30, 30, 30), Material = Enum.Material.DiamondPlate, CanCollide = false })
 		end
-		local tag = P({ Name = "BayLabel", Size = V(isPit and 8 or 4, 1.6, 0.3), Position = lp + V(0, 16, -33.6), Color = rgb(240, 200, 30) })
-		surfaceText(tag, Enum.NormalId.Back, isPit and ("ПОСТ " .. i .. " · ЯМА") or ("ПОСТ " .. i), rgb(20, 20, 20))
-		local bay = { index = #Bays + 1, localIdx = i, plot = plot, pos = O + lp, job = nil }
+		local bonus = i > (Config.BaseBays or 3)
+		local tagText = isPit and ("ПОСТ " .. i .. " · ЯМА") or (bonus and ("⭐ ПОСТ " .. i) or ("ПОСТ " .. i))
+		local tag = P({ Name = "BayLabel", Size = V((isPit or bonus) and 8 or 4, 1.6, 0.3), Position = lp + V(0, 16, -33.6), Color = bonus and rgb(255, 215, 90) or rgb(240, 200, 30) })
+		surfaceText(tag, Enum.NormalId.Back, tagText, rgb(20, 20, 20))
+		local bay = { index = #Bays + 1, localIdx = i, plot = plot, pos = O + lp, job = nil, bonus = bonus or nil }
 		Bays[bay.index] = bay
 		plot.bays[i] = bay
 	end
@@ -1102,7 +1315,7 @@ local function buildPlot(k)
 		surfaceText(num, Enum.NormalId.Top, "P" .. i, rgb(240, 240, 240))
 		table.insert(plot.parking, { index = i, pos = O + lp, job = nil })
 	end
-	local psign = P({ Name = "ParkingSign", Size = V(18, 3, 0.3), Position = V(52, 11, -51.3), Color = rgb(30, 70, 160) })
+	local psign = P({ Name = "ParkingSign", Size = V(14, 3, 0.3), Position = V(0, 11, -51.3), Color = rgb(30, 70, 160) })
 	surfaceText(psign, Enum.NormalId.Front, "🅿 ПАРКОВКА КЛИЕНТОВ", rgb(255, 255, 255))
 
 	-- станции (точки взаимодействия существуют всегда, модель — после покупки)
@@ -1175,7 +1388,14 @@ local function refreshEquipment(plot)
 	end
 	local lift = p and owns(p, "lift")
 	for _, bay in ipairs(plot.bays) do
-		if lift then
+		if bay.bonus then
+			-- пост из доната «+1 подъёмник» всегда со своим подъёмником
+			if p and p:GetAttribute("Pass_extra_lift") then
+				safePlace("lift", CFrame.new(bay.pos), 1)
+			elseif p then
+				ghost(bay.pos + Vector3.new(0, 0, 9), Vector3.new(14, 0.3, 1), "⭐ Пост " .. bay.localIdx .. " + подъёмник: Донат")
+			end
+		elseif lift then
 			safePlace("lift", CFrame.new(bay.pos), 1)
 		elseif p then
 			ghost(bay.pos + Vector3.new(0, 0, 9), Vector3.new(14, 0.3, 1), "Подъёмник: $" .. Config.ItemById.lift.price)
@@ -1188,7 +1408,7 @@ local function refreshEquipment(plot)
 			ghost(pos, Vector3.new(5, 4, 5), "Не куплено: $" .. Config.ItemById[id].price)
 		end
 	end
-	local hoistPos = plot.L(50, 0, -40)
+	local hoistPos = plot.L(58, 0, -40)
 	if p and owns(p, "hoist") then
 		safePlace("hoist", CFrame.new(hoistPos), 1)
 	else
@@ -1889,11 +2109,40 @@ local function checkCarDone(bay)
 			return
 		end
 	end
+	-- отзыв клиента владельцу мастерской
+	local owner = job.plot and job.plot.owner
+	if owner and owner.Parent and not job.tutorial then
+		local stars, why = 5, {}
+		local waited = os.clock() - (job.arrivedAt or os.clock())
+		local slow = Config.StarSlowTime or 240
+		if waited > slow then
+			stars = stars - (waited > slow * 2 and 2 or 1)
+			table.insert(why, "долго ждал")
+		end
+		if job.boltBroken then
+			stars = stars - 1
+			table.insert(why, "сорванный болт")
+		end
+		for _, fs in ipairs(job.faults) do
+			if fs.sloppy then
+				stars = stars - 1
+				table.insert(why, "капиталка без динамометрического ключа")
+				break
+			end
+		end
+		addReview(owner, math.max(1, stars), table.concat(why, ", "))
+	end
 	for p, earned in pairs(job.earnings) do
 		if p.Parent then
-			local bonus = addCash(p, math.max(Config.ClientTipMin or 150, math.floor(earned * Config.CarCompleteBonus)), true)
+			local tip = math.max(Config.ClientTipMin or 150, math.floor(earned * Config.CarCompleteBonus))
+			local rt = ratingOf(PD[p])
+			if rt and rt >= 4.5 then
+				tip = tip * (1 + (Config.StarTipBonus or 0.2))
+			end
+			local bonus = addCash(p, tip, true)
 			sfx(bay.pos, "cash")
 			notify(p, "🚗 " .. job.name .. " готова! Бонус от клиента: +$" .. bonus, "good")
+			questAdd(p, "cars", 1)
 		end
 	end
 	if job.tutorial and Tut.carDone then
@@ -1918,6 +2167,9 @@ local function completeFault(bay, fs, p, share)
 	if p.Parent and bay.job then
 		local got = addCash(p, base, true)
 		addRepair(p)
+		questAdd(p, "fix", 1)
+		questAdd(p, "fault", 1, fs.def.id)
+		syncProgress(p)
 		sfx(bay.pos, "done")
 		notify(p, "✅ " .. fs.def.name .. ": +$" .. got, "good")
 		bay.job.earnings[p] = (bay.job.earnings[p] or 0) + base
@@ -2047,7 +2299,7 @@ spawnCar = function(plot, opts)
 		end
 		local bays = {}
 		for _, b in ipairs(plot.bays) do
-			table.insert(bays, { idx = b.localIdx, free = (b.job == nil and not b.reserved), pit = (b.localIdx == (Config.PitBay or 1)), lift = owns(p, "lift") })
+			table.insert(bays, { idx = b.localIdx, free = (b.job == nil and not b.reserved), pit = (b.localIdx == (Config.PitBay or 1)), lift = owns(p, "lift") or b.bonus == true, locked = bayLocked(b), bonus = b.bonus == true })
 		end
 		local faults = {}
 		for _, fs in ipairs(job.faults) do
@@ -2067,6 +2319,7 @@ spawnCar = function(plot, opts)
 		return
 	end
 	job.arrived = true
+	job.arrivedAt = os.clock()
 	job.client = seatClient(plot)
 	if plot.owner and not job.tutorial then
 		notify(plot.owner, "🚗 Новый клиент: " .. job.name .. " на парковке (место P" .. spot.index .. ")", "info")
@@ -2089,6 +2342,10 @@ ParkingEvent.OnServerEvent:Connect(function(p, action, spotIdx, bayLocal)
 	local job = spot.job
 	if not job or not job.arrived or job.driving or job.leaving then
 		notify(p, "Машина ещё не готова", "bad")
+		return
+	end
+	if bayLocked(bay) then
+		notify(p, "⭐ Пост " .. bay.localIdx .. " открывается донатом «+1 подъёмник» (Компьютер → Донат)", "bad")
 		return
 	end
 	if bay.job or bay.reserved then
@@ -2221,6 +2478,9 @@ end
 
 local function liftCheck(p, lift, bay, def)
 	local pb = Config.PitBay or 1
+	if bay and bay.bonus then
+		return true -- донатный пост со своим подъёмником
+	end
 	if def and def.pit and bay and bay.localIdx == pb then
 		return true -- работаем из смотровой ямы
 	end
@@ -2333,6 +2593,10 @@ local function handleBolt(p, fs, arg)
 			busy(fs, boltTime * 1.5, "Пытаемся открутить ржавый болт...", function()
 				if math.random() < (Config.BoltBreakChance or 0.15) then
 					fs.bolts[k] = "broken"
+					local bb = Bays[fs.bayIndex]
+					if bb and bb.job then
+						bb.job.boltBroken = true
+					end
 					sfx(bpos(fs), "break_")
 					notify(p, "💥 Болт сорвало! Нажмите на него, чтобы выкрутить. В следующий раз — WD-40 или молоток.", "bad")
 				else
@@ -2768,12 +3032,60 @@ local function applySpeed(p)
 	end
 end
 
+-- значок VIP над головой
+local function applyVipTag(p)
+	local head = p.Character and p.Character:FindFirstChild("Head")
+	if not head or head:FindFirstChild("VipTag") then
+		return
+	end
+	if not p:GetAttribute("Pass_vip") then
+		return
+	end
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "VipTag"
+	bb.Size = UDim2.new(0, 90, 0, 26)
+	bb.StudsOffset = Vector3.new(0, 2.6, 0)
+	bb.MaxDistance = 60
+	bb.AlwaysOnTop = true
+	local tl = Instance.new("TextLabel")
+	tl.Size = UDim2.new(1, 0, 1, 0)
+	tl.BackgroundColor3 = Color3.fromRGB(70, 55, 20)
+	tl.BackgroundTransparency = 0.2
+	tl.Text = "⭐ VIP"
+	tl.TextScaled = true
+	tl.Font = Enum.Font.GothamBlack
+	tl.TextColor3 = Color3.fromRGB(255, 215, 90)
+	tl.Parent = bb
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 8)
+	c.Parent = tl
+	bb.Parent = head
+end
+
 local function grantPass(p, key)
 	p:SetAttribute("Pass_" .. key, true)
 	if key == "x2speed" then
 		applySpeed(p)
+	elseif key == "vip" then
+		applyVipTag(p)
+		Hooks.refreshSigns(p)
+	elseif key == "extra_lift" then
+		local pl = plotOf(p)
+		if pl then
+			refreshEquipment(pl)
+		end
 	end
 	notify(p, "⭐ Активировано: " .. Config.GamePasses[key].name, "good")
+end
+
+local function grantProduct(p, key)
+	local dp = Config.DevProducts[key]
+	if key == "boost30" then
+		local now = os.time()
+		local untilT = math.max(now, p:GetAttribute("BoostUntil") or 0) + (dp.minutes or 30) * 60
+		p:SetAttribute("BoostUntil", untilT)
+		notify(p, "⚡ " .. dp.name .. " активирован! Осталось " .. math.floor((untilT - now) / 60) .. " мин.", "good")
+	end
 end
 
 MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(p, passId, purchased)
@@ -2937,6 +3249,60 @@ ShopFunction.OnServerInvoke = function(p, action, id, qty)
 			return true, "(Studio) Выдано бесплатно для теста"
 		end
 		return false, "Game Pass ещё не настроен (вставьте ID в MechanicConfig)"
+
+	elseif action == "product" then
+		local dp = Config.DevProducts[id]
+		if not dp then
+			return false, "Ошибка"
+		end
+		if dp.id > 0 then
+			MarketplaceService:PromptProductPurchase(p, dp.id)
+			return true, "Окно покупки открыто"
+		elseif RunService:IsStudio() then
+			grantProduct(p, id)
+			return true, "(Studio) Выдано бесплатно для теста"
+		end
+		return false, "Товар ещё не настроен (вставьте Product ID в MechanicConfig)"
+
+	elseif action == "daily" then
+		if not d.loaded or not d.tut then
+			return false, "Сначала пройдите обучение"
+		end
+		ensureDaily(p)
+		if not p:GetAttribute("DailyReady") then
+			return false, "Награда уже получена — приходите завтра!"
+		end
+		local streak = p:GetAttribute("DailyStreak") or 1
+		local amount = (Config.DailyRewards[streak] or Config.DailyRewards[1])
+		if p:GetAttribute("Pass_vip") then
+			amount = amount * (Config.VipDailyMultiplier or 2)
+		end
+		d.daily = { day = today(), streak = streak }
+		addCash(p, amount, false)
+		ensureDaily(p)
+		return true, "🎁 Ежедневная награда (день " .. streak .. "): +$" .. amount
+
+	elseif action == "quest" then
+		ensureDaily(p)
+		local def = Config.QuestById[id]
+		if not def or not d.quests then
+			return false, "Ошибка"
+		end
+		for _, q in ipairs(d.quests.list) do
+			if q.id == id then
+				if q.claimed then
+					return false, "Награда уже получена"
+				end
+				if q.n < def.goal then
+					return false, "Задание ещё не выполнено"
+				end
+				q.claimed = true
+				addCash(p, def.reward, false)
+				questsSync(p)
+				return true, "📋 Награда за задание: +$" .. def.reward
+			end
+		end
+		return false, "Это задание уже сменилось"
 	end
 	return false, "Неизвестное действие"
 end
@@ -2971,8 +3337,52 @@ local function save(p)
 			data.hire[w.id] = true
 		end
 	end
+	data.daily = d.daily
+	data.quests = d.quests
+	data.reviews = d.reviews
+	data.reviewsTotal = d.reviewsTotal
+	data.receipts = d.receipts
+	data.boostLeft = math.max(0, (p:GetAttribute("BoostUntil") or 0) - os.time())
 	data.savedAt = os.time()
-	DataSave.save("p_" .. p.UserId, data)
+	task.spawn(function()
+		-- глобальная таблица лидеров
+		pcall(function()
+			DataStoreService:GetOrderedDataStore(Config.LeaderboardStore):SetAsync("u_" .. p.UserId, data.repairs)
+		end)
+	end)
+	return DataSave.save("p_" .. p.UserId, data)
+end
+
+-- разовые покупки (буст). Повторно одну покупку не выдаём: id чеков хранятся в сохранении
+MarketplaceService.ProcessReceipt = function(info)
+	local p = Players:GetPlayerByUserId(info.PlayerId)
+	local d = p and PD[p]
+	if not d or not d.loaded then
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+	d.receipts = d.receipts or {}
+	if table.find(d.receipts, info.PurchaseId) then
+		return Enum.ProductPurchaseDecision.PurchaseGranted
+	end
+	local key
+	for k, dp in pairs(Config.DevProducts) do
+		if dp.id > 0 and dp.id == info.ProductId then
+			key = k
+		end
+	end
+	if not key then
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+	grantProduct(p, key)
+	table.insert(d.receipts, info.PurchaseId)
+	while #d.receipts > 50 do
+		table.remove(d.receipts, 1)
+	end
+	if DataSave.available() and not save(p) then
+		-- выдано в этой сессии; Roblox повторит чек позже, а повтор отсечётся по receipts
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+	return Enum.ProductPurchaseDecision.PurchaseGranted
 end
 
 ---------------------------------------------------------------- БОКСЫ ИГРОКОВ
@@ -3283,6 +3693,10 @@ local function onPlayerAdded(p)
 	local reps = Instance.new("IntValue")
 	reps.Name = REPAIRS
 	reps.Parent = ls
+	local starsVal = Instance.new("StringValue")
+	starsVal.Name = STARS
+	starsVal.Value = "—"
+	starsVal.Parent = ls
 
 	local ok, data = DataSave.load("p_" .. p.UserId)
 	if not p.Parent then
@@ -3320,6 +3734,17 @@ local function onPlayerAdded(p)
 	d.shopName = data and data.shopName or nil
 	d.loan = data and data.loan or 0
 	p:SetAttribute("Loan", d.loan)
+	d.daily = data and data.daily or nil
+	d.quests = data and data.quests or nil
+	d.reviews = data and data.reviews or {}
+	d.reviewsTotal = data and data.reviewsTotal or 0
+	d.receipts = data and data.receipts or {}
+	if data and (data.boostLeft or 0) > 0 then
+		p:SetAttribute("BoostUntil", os.time() + data.boostLeft)
+	end
+	ensureDaily(p)
+	questsSync(p)
+	syncProgress(p)
 
 	local plot = claimPlot(p)
 	if plot then
@@ -3331,7 +3756,7 @@ local function onPlayerAdded(p)
 		local refreshQueued = false
 		p.AttributeChanged:Connect(function(attr)
 			local pre = string.sub(attr, 1, 4)
-			if (pre == "Own_" or pre == "Inv_") and not refreshQueued then
+			if (pre == "Own_" or pre == "Inv_" or attr == "Pass_extra_lift") and not refreshQueued then
 				refreshQueued = true
 				task.delay(0.5, function()
 					refreshQueued = false
@@ -3360,16 +3785,20 @@ local function onPlayerAdded(p)
 			end
 		end
 	end
+	Hooks.refreshSigns(p)
 
 	p.CharacterAdded:Connect(function(char)
 		char:WaitForChild("Humanoid")
 		char:WaitForChild("HumanoidRootPart")
 		applySpeed(p)
+		char:WaitForChild("Head", 5)
+		applyVipTag(p)
 		task.wait(0.1)
 		sendHome(p)
 	end)
 	if p.Character then
 		applySpeed(p)
+		applyVipTag(p)
 		sendHome(p)
 	end
 
@@ -3470,7 +3899,7 @@ task.spawn(function()
 		if not World.night then
 			for _, plot in ipairs(Plots) do
 				if plot.owner and plot.ready and plot.parking and plot.nextSpawn and os.clock() >= plot.nextSpawn then
-					local waiting, inWork = 0, 0
+					local waiting, inWork, open = 0, 0, 0
 					for _, sp in ipairs(plot.parking) do
 						if sp.job then
 							waiting = waiting + 1
@@ -3480,9 +3909,17 @@ task.spawn(function()
 						if b.job then
 							inWork = inWork + 1
 						end
+						if not bayLocked(b) then
+							open = open + 1
+						end
 					end
 					if waiting < math.min(Config.MaxWaitingCars or 4, #plot.parking) then
-						local k = (waiting + inWork >= #plot.bays) and 2 or 1
+						local k = (waiting + inWork >= open) and 2 or 1
+						-- хороший рейтинг = клиенты едут чаще, плохой = реже
+						local rt = ratingOf(PD[plot.owner])
+						if rt then
+							k = k * math.clamp(1 - (rt - 3) * (Config.StarSpawnEffect or 0.15), 0.5, 1.6)
+						end
 						plot.nextSpawn = os.clock() + (Config.CarSpawnInterval or 18) * k
 						task.spawn(spawnCar, plot)
 					else
@@ -3491,6 +3928,94 @@ task.spawn(function()
 				end
 			end
 		end
+	end
+end)
+
+-- новые сутки (задания, ежедневная награда) и таблица лидеров
+task.spawn(function()
+	while true do
+		for _, p in ipairs(Players:GetPlayers()) do
+			if PD[p] then
+				ensureDaily(p)
+			end
+		end
+		task.wait(30)
+	end
+end)
+
+local nameCache = {}
+local function userName(uid)
+	if nameCache[uid] then
+		return nameCache[uid]
+	end
+	local pl = Players:GetPlayerByUserId(uid)
+	local ok, n = pcall(function()
+		return pl and pl.DisplayName or Players:GetNameFromUserIdAsync(uid)
+	end)
+	nameCache[uid] = ok and n or ("#" .. uid)
+	return nameCache[uid]
+end
+
+task.spawn(function()
+	task.wait(5)
+	local store
+	pcall(function()
+		store = DataStoreService:GetOrderedDataStore(Config.LeaderboardStore)
+	end)
+	while true do
+		local rows
+		if store then
+			local ok, pages = pcall(function()
+				return store:GetSortedAsync(false, Config.LeaderboardSize or 10)
+			end)
+			if ok and pages then
+				rows = {}
+				for _, e in ipairs(pages:GetCurrentPage()) do
+					local uid = tonumber(string.sub(e.key, 3))
+					if uid then
+						table.insert(rows, { name = userName(uid), value = e.value })
+					end
+				end
+			end
+		end
+		local live = {}
+		for _, p in ipairs(Players:GetPlayers()) do
+			live[p.DisplayName] = repairsOf(p)
+		end
+		if not rows then
+			-- нет доступа к DataStore (Studio без API) — показываем игроков на сервере
+			rows = {}
+			for n, v in pairs(live) do
+				table.insert(rows, { name = n, value = v })
+			end
+		else
+			for _, r in ipairs(rows) do
+				if live[r.name] and live[r.name] > r.value then
+					r.value = live[r.name]
+				end
+			end
+		end
+		table.sort(rows, function(a, b)
+			return a.value > b.value
+		end)
+		local lines = { "🏆 ТОП МЕХАНИКОВ (ремонты)" }
+		for i, r in ipairs(rows) do
+			if i > (Config.LeaderboardSize or 10) then
+				break
+			end
+			table.insert(lines, i .. ". " .. r.name .. " — " .. r.value)
+		end
+		if #rows == 0 then
+			table.insert(lines, "пока пусто")
+		end
+		local txt = table.concat(lines, "\n")
+		for _, pl in ipairs(Plots) do
+			for _, l in ipairs(pl.leaderLabels or {}) do
+				l.Text = txt
+			end
+		end
+		workspace:SetAttribute("Leaderboard", HttpService:JSONEncode(rows))
+		task.wait(Config.LeaderboardRefresh or 90)
 	end
 end)
 

@@ -61,9 +61,68 @@ Config.NpcAvatars = {
 -- Create a Pass (картинка + название) → включите "Item for Sale" и цену в Robux → скопируйте Pass ID (число).
 -- Пока id = 0: в игре кнопка показывает «Скоро», в Studio бонус выдаётся бесплатно для теста.
 Config.GamePasses = {
-	x2cash  = { id = 0, name = "x2 денег", desc = "Все доходы удваиваются" },
-	x2speed = { id = 0, name = "x2 бег", desc = "Скорость бега в 2 раза выше" },
+	vip        = { id = 0, name = "VIP-пасс", desc = "+25% ко всем доходам, ежедневная награда x2, значок VIP над головой и золотая табличка владельца" },
+	extra_lift = { id = 0, name = "+1 подъёмник", desc = "Открывает 4-й пост со своим подъёмником: ещё одна машина в работе одновременно" },
+	x2cash     = { id = 0, name = "x2 денег", desc = "Все доходы удваиваются" },
+	x2speed    = { id = 0, name = "x2 бег", desc = "Скорость бега в 2 раза выше" },
 }
+Config.DonateOrder = { "vip", "extra_lift", "x2cash", "x2speed" } -- порядок карточек во вкладке «Донат»
+Config.VipIncomeBonus = 0.25      -- VIP: +25% к доходам
+Config.VipDailyMultiplier = 2     -- VIP: ежедневная награда x2
+
+-- Разовые покупки (Developer Products): Monetization → Developer Products → Create → скопируйте Product ID.
+-- Пока id = 0: в Studio выдаётся бесплатно для теста.
+Config.DevProducts = {
+	boost30 = { id = 0, name = "Буст x2 на 30 мин", desc = "Все доходы x2 на 30 минут игры (время идёт, только пока вы в игре). Покупки складываются.", minutes = 30 },
+}
+
+-- 4-й пост открывается донатом «+1 подъёмник» (посты 1-3 доступны всем)
+Config.BaseBays = 3
+
+-- ЕЖЕДНЕВНАЯ НАГРАДА (реальные сутки, серия входов подряд; после 7-го дня — снова с 1-го)
+Config.DailyRewards = { 150, 250, 350, 500, 650, 800, 1200 }
+
+-- ЗАДАНИЯ НА ДЕНЬ (каждые реальные сутки выбираются новые)
+-- kind: fix = устранить неисправность, cars = отдать готовую машину, earn = заработать $, fault = конкретный ремонт, stars5 = отзыв на 5★
+Config.QuestsPerDay = 3
+Config.DailyQuests = {
+	{ id = "fix5",     kind = "fix",    goal = 5,    reward = 300, text = "Устраните 5 неисправностей" },
+	{ id = "fix12",    kind = "fix",    goal = 12,   reward = 700, text = "Устраните 12 неисправностей" },
+	{ id = "cars3",    kind = "cars",   goal = 3,    reward = 400, text = "Полностью отремонтируйте 3 машины" },
+	{ id = "cars6",    kind = "cars",   goal = 6,    reward = 800, text = "Полностью отремонтируйте 6 машин" },
+	{ id = "earn1500", kind = "earn",   goal = 1500, reward = 400, text = "Заработайте $1500 на ремонтах" },
+	{ id = "earn4000", kind = "earn",   goal = 4000, reward = 900, text = "Заработайте $4000 на ремонтах" },
+	{ id = "oil2",     kind = "fault",  fault = "oil",    goal = 2, reward = 250, text = "Замените масло 2 раза" },
+	{ id = "brakes2",  kind = "fault",  fault = "brakes", goal = 2, reward = 350, text = "Поменяйте тормозные колодки 2 раза" },
+	{ id = "tire2",    kind = "fault",  fault = "tire",   goal = 2, reward = 300, text = "Сделайте шиномонтаж 2 раза" },
+	{ id = "stars3",   kind = "stars5", goal = 3,    reward = 500, text = "Получите 3 отзыва на 5★" },
+}
+Config.QuestById = {}
+for _, q in ipairs(Config.DailyQuests) do
+	Config.QuestById[q.id] = q
+end
+
+-- РАНГ МАСТЕРСКОЙ (по числу ремонтов; бонус к доходу от ремонтов)
+Config.Ranks = {
+	{ repairs = 0,   name = "Гаражная",    bonus = 0 },
+	{ repairs = 15,  name = "Районная",    bonus = 0.05 },
+	{ repairs = 40,  name = "Городская",   bonus = 0.10 },
+	{ repairs = 90,  name = "Известная",   bonus = 0.15 },
+	{ repairs = 180, name = "Элитная",     bonus = 0.20 },
+	{ repairs = 350, name = "Легендарная", bonus = 0.25 },
+}
+
+-- РЕЙТИНГ В ЗВЁЗДАХ: каждый клиент оставляет отзыв 1-5★
+-- -1★ если ждал дольше StarSlowTime с приезда, ещё -1★ если вдвое дольше, -1★ за сорванный болт, -1★ за капиталку без динамометрического ключа
+Config.StarSlowTime = 240
+Config.RatingWindow = 20          -- рейтинг = среднее последних N отзывов
+Config.StarTipBonus = 0.2         -- рейтинг 4.5★+ : чаевые клиента +20%
+Config.StarSpawnEffect = 0.15     -- каждая звезда выше/ниже 3★ ускоряет/замедляет поток клиентов на 15%
+
+-- ТАБЛИЦА ЛИДЕРОВ (глобальная, по числу ремонтов)
+Config.LeaderboardStore = "MechanicTop_v1"
+Config.LeaderboardSize = 10
+Config.LeaderboardRefresh = 90    -- секунд между обновлениями
 
 -- category: part = запчасть, fluid = тех. жидкость/расходник (заказываются и лежат на складе)
 -- tool = инструмент, equip = оборудование (покупаются навсегда)
