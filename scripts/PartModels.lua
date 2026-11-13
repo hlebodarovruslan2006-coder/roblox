@@ -263,7 +263,145 @@ B.weights = function(m)
 	add(m, "B", V(2.4, 0.05, 0.4), V(0, 0.02, 0), C.dark)
 end
 
+---------------------------------------------------------------- СЕЗОННЫЕ ШИНЫ
+local function seasonTire(m, studs, stripe)
+	add(m, "C", V(0.9, 2.6, 2.6), V(0, 1.3, 0), C.rubber, MAT.Fabric)
+	add(m, "C", V(0.92, 1.7, 1.7), V(0, 1.3, 0), rgb(55, 55, 58), MAT.Fabric)
+	add(m, "C", V(0.95, 1.45, 1.45), V(0, 1.3, 0), rgb(12, 12, 12))
+	-- цветная полоса на боковине: синяя = зима, жёлтая = лето
+	add(m, "C", V(0.94, 2.0, 2.0), V(0, 1.3, 0), stripe, MAT.SmoothPlastic)
+	add(m, "C", V(0.96, 1.85, 1.85), V(0, 1.3, 0), rgb(55, 55, 58), MAT.Fabric)
+	for i = 0, 15 do
+		local a = math.rad(i * 22.5)
+		add(m, "B", V(0.95, 0.16, 0.28), V(0, 1.3 + math.cos(a) * 1.27, math.sin(a) * 1.27), rgb(18, 18, 18), MAT.Fabric, V(-i * 22.5, 0, 0))
+		if studs then
+			add(m, "S", V(0.12, 0.12, 0.12), V(0.3, 1.3 + math.cos(a) * 1.32, math.sin(a) * 1.32), C.chrome, MAT.Metal)
+			add(m, "S", V(0.12, 0.12, 0.12), V(-0.3, 1.3 + math.cos(a + 0.2) * 1.32, math.sin(a + 0.2) * 1.32), C.chrome, MAT.Metal)
+		end
+	end
+end
+B.winter_tire = function(m)
+	seasonTire(m, true, rgb(80, 160, 240))
+	add(m, "B", V(0.1, 0.5, 0.08), V(0.5, 1.3, 0), C.white) -- снежинка
+	add(m, "B", V(0.1, 0.08, 0.5), V(0.5, 1.3, 0), C.white)
+end
+B.summer_tire = function(m)
+	seasonTire(m, false, C.yellow)
+	add(m, "V", V(0.35, 0.1, 0.35), V(0.5, 1.3, 0), C.yellow, nil, V(0, 0, 90)) -- солнце
+end
+
+---------------------------------------------------------------- КОРОБКИ ПЕРЕДАЧ
+local function canister(m, body, label, h)
+	add(m, "B", V(1.2, h, 0.7), V(0, h / 2, 0), body)
+	add(m, "B", V(0.9, h * 0.45, 0.72), V(0, h * 0.5, 0), label)
+	add(m, "V", V(0.35, 0.3, 0.35), V(-0.3, h + 0.15, 0), C.black)
+	add(m, "B", V(0.3, 0.45, 0.4), V(0.35, h + 0.1, 0), body)
+end
+B.gear_oil = function(m)
+	canister(m, rgb(40, 90, 50), C.white, 1.9)
+	add(m, "B", V(0.5, 0.12, 0.74), V(0, 0.95, 0), rgb(40, 90, 50)) -- «МКПП»
+end
+B.atf = function(m)
+	canister(m, C.red, C.white, 1.9)
+	add(m, "B", V(0.6, 0.12, 0.74), V(0, 0.95, 0), C.red)
+end
+B.cvt_fluid = function(m)
+	canister(m, rgb(120, 60, 170), C.white, 1.9)
+	add(m, "B", V(0.6, 0.12, 0.74), V(0, 0.95, 0), rgb(120, 60, 170))
+end
+-- фильтры: сетка МКПП, плоский фильтр АКПП, цилиндрический фильтр вариатора
+B.mt_filter = function(m)
+	add(m, "B", V(1.6, 0.15, 1.1), V(0, 0.1, 0), C.steel, MAT.Metal)
+	for i = -3, 3 do
+		add(m, "B", V(0.04, 0.17, 1.0), V(i * 0.2, 0.12, 0), C.dark, MAT.Metal)
+	end
+	add(m, "V", V(0.3, 0.4, 0.3), V(0.6, 0.35, 0), C.steel, MAT.Metal)
+end
+B.at_filter = function(m)
+	add(m, "B", V(1.8, 0.35, 1.2), V(0, 0.2, 0), C.black)
+	add(m, "B", V(1.5, 0.37, 0.9), V(0, 0.2, 0), C.red)
+	add(m, "V", V(0.35, 0.5, 0.35), V(0.6, 0.55, 0), C.black)
+end
+B.cvt_filter = function(m)
+	add(m, "V", V(0.9, 1.3, 0.9), V(0, 0.65, 0), rgb(120, 60, 170))
+	add(m, "V", V(0.75, 0.12, 0.75), V(0, 1.35, 0), C.steel, MAT.Metal)
+	add(m, "V", V(0.3, 0.05, 0.3), V(0, 1.43, 0), C.dark)
+end
+-- МКПП
+B.clutch_kit = function(m)
+	add(m, "C", V(0.3, 2.2, 2.2), V(0, 1.1, 0), C.steel, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.32, 1.7, 1.7), V(0, 1.1, 0), C.dark, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.25, 1.9, 1.9), V(0, 1.1, -0.35), C.brown, MAT.Sand, V(0, 90, 0))
+	add(m, "C", V(0.5, 0.5, 0.5), V(0, 1.1, 0.1), C.chrome, MAT.Metal, V(0, 90, 0))
+end
+B.mt_synchro = function(m)
+	for i = 0, 2 do
+		add(m, "C", V(0.25, 1.3, 1.3), V(0, 0.15 + i * 0.3, 0), C.copper, MAT.Metal, V(0, 0, 90))
+		add(m, "C", V(0.27, 0.9, 0.9), V(0, 0.15 + i * 0.3, 0), C.dark, nil, V(0, 0, 90))
+	end
+end
+B.mt_bearing = function(m)
+	add(m, "C", V(0.5, 1.4, 1.4), V(0, 0.7, 0), C.chrome, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.52, 1.1, 1.1), V(0, 0.7, 0), C.dark, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.54, 0.6, 0.6), V(0, 0.7, 0), C.chrome, MAT.Metal, V(0, 90, 0))
+	for i = 0, 7 do
+		local a = math.rad(i * 45)
+		add(m, "S", V(0.18, 0.18, 0.18), V(math.cos(a) * 0.43, 0.7 + math.sin(a) * 0.43, 0.27), C.steel, MAT.Metal)
+	end
+end
+-- АКПП
+B.at_solenoid = function(m)
+	add(m, "B", V(1.8, 0.3, 1.0), V(0, 0.15, 0), C.steel, MAT.Metal)
+	for i = 0, 3 do
+		add(m, "V", V(0.3, 0.6, 0.3), V(-0.65 + i * 0.43, 0.6, 0), C.black)
+		add(m, "B", V(0.18, 0.15, 0.25), V(-0.65 + i * 0.43, 0.97, 0), C.yellow)
+	end
+end
+B.at_clutches = function(m)
+	for i = 0, 4 do
+		add(m, "C", V(0.08, 1.6, 1.6), V(0, 0.05 + i * 0.12, 0), (i % 2 == 0) and C.brown or C.steel, (i % 2 == 0) and MAT.Sand or MAT.Metal, V(0, 0, 90))
+	end
+	add(m, "C", V(0.7, 0.6, 0.6), V(0, 0.3, 0), C.dark, nil, V(0, 0, 90))
+end
+B.at_torque = function(m)
+	add(m, "C", V(0.9, 2.2, 2.2), V(0, 1.1, 0), C.steel, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.6, 2.3, 2.3), V(0, 1.1, -0.1), C.chrome, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.5, 0.45, 0.45), V(0, 1.1, 0.55), C.dark, MAT.Metal, V(0, 90, 0))
+	for i = 0, 5 do
+		local a = math.rad(i * 60)
+		add(m, "C", V(0.2, 0.18, 0.18), V(math.cos(a) * 0.9, 1.1 + math.sin(a) * 0.9, -0.45), C.dark, MAT.Metal, V(0, 90, 0))
+	end
+end
+-- вариатор
+B.cvt_belt = function(m)
+	for i = 0, 15 do
+		local a = math.rad(i * 22.5)
+		local x, y = math.cos(a) * 1.0, math.sin(a) * 0.55
+		add(m, "B", V(0.22, 0.12, 0.35), V(x, 0.7 + y, 0), C.chrome, MAT.Metal, V(0, 0, -i * 22.5 + 90))
+	end
+end
+B.cvt_pulley = function(m)
+	add(m, "C", V(0.15, 0.4, 0.4), V(0, 0.9, 0), C.dark, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.25, 1.8, 1.8), V(0, 0.9, -0.3), C.chrome, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.25, 1.8, 1.8), V(0, 0.9, 0.3), C.chrome, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(1.4, 0.35, 0.35), V(0, 0.9, 0), C.steel, MAT.Metal, V(0, 90, 0))
+end
+B.cvt_valve = function(m)
+	add(m, "C", V(1.6, 0.35, 0.35), V(0, 0.3, 0), C.chrome, MAT.Metal)
+	add(m, "C", V(0.4, 0.5, 0.5), V(-0.5, 0.3, 0), rgb(120, 60, 170))
+	add(m, "B", V(0.3, 0.3, 0.3), V(-0.5, 0.65, 0), C.black)
+	add(m, "C", V(0.3, 0.42, 0.42), V(0.6, 0.3, 0), C.steel, MAT.Metal)
+end
+
 ---------------------------------------------------------------- ИНСТРУМЕНТЫ
+B.vip_impact = function(m)
+	add(m, "C", V(1.6, 0.6, 0.6), V(0, 1.4, 0), rgb(212, 175, 55), MAT.Metal)
+	add(m, "C", V(0.4, 0.4, 0.4), V(1.0, 1.4, 0), C.black)
+	add(m, "C", V(0.4, 0.25, 0.25), V(1.4, 1.4, 0), C.chrome, MAT.Metal)
+	add(m, "B", V(0.45, 1.2, 0.45), V(-0.4, 0.6, 0), C.black, nil, V(0, 0, -10))
+	add(m, "B", V(0.7, 0.5, 0.7), V(-0.5, 0.05, 0), rgb(212, 175, 55), MAT.Metal)
+	add(m, "S", V(0.35, 0.35, 0.35), V(-0.1, 1.85, 0), rgb(255, 215, 90), MAT.Neon) -- звезда VIP
+end
 B.impact = function(m)
 	add(m, "C", V(1.6, 0.6, 0.6), V(0, 1.4, 0), C.yellow)
 	add(m, "C", V(0.4, 0.4, 0.4), V(1.0, 1.4, 0), C.black)

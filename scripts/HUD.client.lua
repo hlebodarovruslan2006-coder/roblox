@@ -239,6 +239,7 @@ local TABS = {
 	{ id = "tool", name = "Инструменты" },
 	{ id = "equip", name = "Оборудование" },
 	{ id = "staff", name = "Персонал" },
+	{ id = "trans", name = "⚙ КПП" },
 	{ id = "donate", name = "⭐ Донат" },
 }
 local currentTab = "part"
@@ -246,7 +247,7 @@ local tabButtons = {}
 local renderComputer
 
 for i, t in ipairs(TABS) do
-	local b = button(tabsRow, t.name, COLORS.gray, 96, 32, function()
+	local b = button(tabsRow, t.name, COLORS.gray, 82, 32, function()
 		currentTab = t.id
 		renderComputer()
 	end)
@@ -275,7 +276,16 @@ local function itemRow(it)
 			shop("buy", it.id, 5)
 		end)
 	else
-		if owns(it.id) then
+		if it.vip then
+			if owns(it.id) then
+				button(r, "✔ Есть (VIP)", COLORS.good, 140, 30)
+			else
+				button(r, "⭐ Только с VIP-пассом", COLORS.warn, 200, 30, function()
+					currentTab = "donate"
+					renderComputer()
+				end)
+			end
+		elseif owns(it.id) then
 			button(r, "✔ Куплено", COLORS.good, 140, 30)
 		else
 			button(r, "Купить за $" .. it.price, COLORS.btn, 160, 30, function()
@@ -298,7 +308,7 @@ renderComputer = function()
 	end
 	local y = compBody.CanvasPosition
 	clear(compBody)
-	if currentTab == "part" or currentTab == "fluid" then
+	if currentTab == "part" or currentTab == "fluid" or currentTab == "trans" then
 		local note = "🚚 Доставка заказа: " .. Config.DeliveryTime .. " сек. Администратор заказывает мгновенно и на 10% дешевле."
 		if player:GetAttribute("Hire_admin") then
 			note = "🧑‍💼 Администратор на месте: доставка мгновенная, скидка 10%."
@@ -360,7 +370,8 @@ renderComputer = function()
 		end
 	else
 		for _, it in ipairs(Config.Items) do
-			if it.cat == currentTab then
+			local match = (currentTab == "trans") and (it.group == "trans") or (it.cat == currentTab and it.group ~= "trans")
+			if match then
 				itemRow(it)
 			end
 		end
@@ -485,12 +496,15 @@ local function renderStep(c, f)
 			{ id = "wd40", name = "🧴 WD-40 (" .. inv("wd40") .. ")" },
 			{ id = "hammer", name = "🔨 Молоток" },
 		}
+		if owns("vip_impact") then
+			table.insert(defs, 1, { id = "vip", name = "⭐ VIP: все разом" })
+		end
 		for i, m in ipairs(defs) do
 			local col = COLORS.gray
 			if boltMode == m.id then
 				col = COLORS.btn
 			end
-			local b = button(modes, m.name, col, 128, 30, function()
+			local b = button(modes, m.name, col, (#defs > 3) and 93 or 128, 30, function()
 				boltMode = m.id
 				renderJob()
 			end)
@@ -507,8 +521,11 @@ local function renderStep(c, f)
 		end
 		label(c, "🔩 обычный  🟤 ржавый (может сорваться, 15%)  💧 обработан  💥 сорван — нужен экстрактор", 12, COLORS.dim, 16)
 	elseif st.type == "action" then
+		if st.wait then
+			label(c, "⏳ Этот шаг идёт сам (" .. math.floor((st.time or 0) / 60) .. " мин " .. math.floor((st.time or 0) % 60) .. " сек). Запустите и занимайтесь другой машиной — придёт уведомление.", 12, COLORS.dim, 16)
+		end
 		local r = row(c, 34)
-		button(r, "▶ " .. st.label, COLORS.good, 300, 32, function()
+		button(r, (st.wait and "⏳ " or "▶ ") .. st.label, COLORS.good, 300, 32, function()
 			act("do", f.idx)
 		end)
 	elseif st.type == "torque" then
@@ -958,7 +975,7 @@ local clockLbl = new("TextLabel", { Parent = gui, BackgroundColor3 = COLORS.bg, 
 corner(clockLbl, 8)
 local musicBtn = button(gui, "🎵 Музыка: вкл", COLORS.gray, 160, 28)
 musicBtn.Position = UDim2.new(1, -172, 0, 46)
-local WEATHER = { clear = "☀ Ясно", cloudy = "☁ Облачно", rain = "🌧 Дождь" }
+local WEATHER = { clear = "☀ Ясно", cloudy = "☁ Облачно", rain = "🌧 Дождь", snow = "❄ Снег" }
 
 local music = Instance.new("Sound")
 music.Name = "BackgroundMusic"
@@ -1024,6 +1041,20 @@ rainSnd.SoundId = Config.RainSound or ""
 rainSnd.Parent = SoundService
 
 local isRaining = false
+local isSnowing = false
+-- снег: крупные медленные хлопья
+local snow = Instance.new("ParticleEmitter")
+snow.Color = ColorSequence.new(Color3.fromRGB(250, 250, 255))
+snow.LightEmission = 0.3
+snow.Transparency = NumberSequence.new(0.1)
+snow.Size = NumberSequence.new(0.35)
+snow.Lifetime = NumberRange.new(5, 7)
+snow.Speed = NumberRange.new(8, 12)
+snow.RotSpeed = NumberRange.new(-60, 60)
+snow.SpreadAngle = Vector2.new(25, 25)
+snow.EmissionDirection = Enum.NormalId.Bottom
+snow.Rate = 0
+snow.Parent = rainPart
 local rainParams = RaycastParams.new()
 rainParams.FilterType = Enum.RaycastFilterType.Exclude
 RunService.RenderStepped:Connect(function()
@@ -1040,6 +1071,7 @@ RunService.RenderStepped:Connect(function()
 		local hit = workspace:Raycast(pos, Vector3.new(0, 80, 0), rainParams)
 		local underRoof = hit ~= nil and hit.Instance.Transparency < 0.9
 		rain.Rate = (isRaining and not underRoof) and 900 or 0
+		snow.Rate = (isSnowing and not underRoof) and 350 or 0
 		rainSnd.Volume = underRoof and 0.12 or 0.35
 	end
 end)
@@ -1050,9 +1082,11 @@ task.spawn(function()
 		local h = math.floor(clk)
 		local m = math.floor((clk - h) * 60)
 		local w = workspace:GetAttribute("Weather") or "clear"
+		local season = workspace:GetAttribute("Season") == "winter" and " · ❄ зима" or ""
 		local night = workspace:GetAttribute("Night")
-		clockLbl.Text = string.format("%s %02d:%02d · день %d · %s", night and "🌙" or "🕗", h, m, workspace:GetAttribute("Day") or 1, WEATHER[w] or w)
+		clockLbl.Text = string.format("%s %02d:%02d · день %d · %s%s", night and "🌙" or "🕗", h, m, workspace:GetAttribute("Day") or 1, WEATHER[w] or w, season)
 		local raining = (w == "rain")
+		isSnowing = (w == "snow")
 		isRaining = raining
 		if raining and rainSnd.SoundId ~= "" and not rainSnd.IsPlaying then
 			rainSnd:Play()

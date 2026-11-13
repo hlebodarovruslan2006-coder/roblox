@@ -427,7 +427,7 @@ pcall(function()
 end)
 
 -- ДЕНЬ / НОЧЬ / ПОГОДА (состояние; цикл запускается внизу, в блоке СТАРТ)
-local World = { night = false, clock = 8, weather = "clear", day = 1 }
+local World = { night = false, clock = 8, weather = "clear", day = 1, season = "summer", seasonLeft = 0, summerSwapLeft = 0 }
 local NightLights = {}  -- { light = PointLight, part = неоновая лампа }
 local NightWindows = {} -- окна домов, которые светятся ночью
 local function applyNight(night)
@@ -459,6 +459,7 @@ local LANE_Z = -66
 local Plots = {}
 local onMentorTalk -- объявлена в блоке обучения
 local Tut = {} -- хуки обучения (open, carDone, carLeft)
+local BankDoors = {} -- позиции дверей банков (цель обучения «возьмите кредит»)
 
 local function plotOf(p)
 	for _, pl in ipairs(Plots) do
@@ -803,6 +804,16 @@ if not carFolder then
 	carFolder.Name = "CarModels"
 	carFolder.Parent = ServerStorage
 end
+-- VIP-машины: ServerStorage → VipCarModels (приезжают только к владельцам VIP-пасса)
+local vipFolder = ServerStorage:FindFirstChild("VipCarModels")
+if not vipFolder then
+	vipFolder = Instance.new("Folder")
+	vipFolder.Name = "VipCarModels"
+	vipFolder.Parent = ServerStorage
+end
+local function folderOf(cm)
+	return cm.vip and vipFolder or carFolder
+end
 local carTemplates = {}
 
 local CAR_REMOVE = {
@@ -910,11 +921,12 @@ local function getCarTemplate(cm)
 	if not cm.model then
 		return nil
 	end
-	if carTemplates[cm.model] == nil then
-		local src = carFolder:FindFirstChild(cm.model)
+	local key = (cm.vip and "vip:" or "") .. cm.model
+	if carTemplates[key] == nil then
+		local src = folderOf(cm):FindFirstChild(cm.model)
 		local tpl = nil
 		if not src then
-			warn("[CarModels] в ServerStorage → CarModels нет модели «" .. cm.model .. "», будет блочная машина")
+			warn("[CarModels] в ServerStorage → " .. folderOf(cm).Name .. " нет модели «" .. cm.model .. "», будет блочная машина")
 		else
 			local ok, res = pcall(prepareCarTemplate, src, cm)
 			if ok then
@@ -923,14 +935,14 @@ local function getCarTemplate(cm)
 				warn("[CarModels] ошибка в модели «" .. cm.model .. "»: " .. tostring(res))
 			end
 		end
-		carTemplates[cm.model] = tpl or false
+		carTemplates[key] = tpl or false
 	end
-	return carTemplates[cm.model] or nil
+	return carTemplates[key] or nil
 end
 
 -- перекраска: только детали, в имени которых есть слово из paint (например "Body")
 local function paintCar(m, cm, color)
-	local src = carFolder:FindFirstChild(cm.model)
+	local src = folderOf(cm):FindFirstChild(cm.model)
 	local key = src and carOpt(cm, src, "paint", "Paint") or cm.paint
 	if type(key) ~= "string" or key == "" then
 		return
@@ -978,11 +990,29 @@ do
 		end
 	end
 	print("[CarModels] загружено своих моделей машин: " .. n)
+
+	-- VIP: модели из папки VipCarModels заменяют блочные VIP-машины из конфига
+	local vipList = {}
+	for _, ch in ipairs(vipFolder:GetChildren()) do
+		if ch:IsA("Model") or ch:IsA("Folder") then
+			local cm = { name = ch:GetAttribute("DisplayName") or ch.Name, model = ch.Name, body = ch:GetAttribute("Body") or "sedan", vip = true }
+			if getCarTemplate(cm) then
+				table.insert(vipList, cm)
+			end
+		end
+	end
+	if #vipList > 0 then
+		Config.VipCarModels = vipList
+	end
+	for _, cm in ipairs(Config.VipCarModels or {}) do
+		cm.vip = true
+	end
+	print("[CarModels] VIP-моделей из VipCarModels: " .. #vipList)
 end
 
 -- машина для клиента или улицы: своя модель, если есть, иначе блочная
-local function buildCar(cm, forTraffic)
-	local color = Config.CarColors[math.random(1, #Config.CarColors)]
+local function buildCar(cm, forTraffic, color)
+	color = color or Config.CarColors[math.random(1, #Config.CarColors)]
 	if not (forTraffic and Config.CustomCarsInTraffic == false) then
 		local tpl = getCarTemplate(cm)
 		if tpl then
@@ -1004,7 +1034,7 @@ local STATION_L = {
 	engine_stand = Vector3.new(55, 0, 2),
 	parts_washer = Vector3.new(55, 0, 16),
 }
-local TOOL_SLOTS = { "impact", "torque", "hammer", "scanner", "multimeter", "extractor", "valve_tool", "ring_compressor" }
+local TOOL_SLOTS = { "impact", "torque", "hammer", "scanner", "multimeter", "extractor", "valve_tool", "ring_compressor", "vip_impact" }
 
 -- плита с прямоугольными вырезами (для смотровых ям): mk(sizeX, sizeZ, centerX, centerZ)
 -- holes = { {x1, x2, z1, z2}, ... } — вырезы не должны перекрываться по X
@@ -1590,6 +1620,7 @@ local function buildCity()
 		surfaceText(sign, Enum.NormalId.Front, "🏦 БАНК · КРЕДИТЫ", rgb(255, 255, 255))
 		windows(cx - 15, cx + 15, 19, 19, 6, 6, 3, 2.4)
 		local d = part({ Name = "BankDoor", Size = V(6, 8, 0.4), Position = V(cx, 4, 103.8), Color = rgb(60, 45, 30), Material = Enum.Material.Wood })
+		table.insert(BankDoors, d.Position)
 		local pr = prompt(d, "Кредит без процентов", "Банк", function(p)
 			OpenUIEvent:FireClient(p, "bank")
 		end)
@@ -1817,15 +1848,20 @@ local function driveCar(car, points, speed)
 	end
 end
 
-local function rollFaults(plot)
+local function rollFaults(plot, gearbox)
 	local recent = (plot and plot.recentFaults) or {}
 	local isRecent = {}
 	for _, id in ipairs(recent) do
 		isRecent[id] = true
 	end
-	local pool, backup = {}, {}
+	local pool, backup, boxPool = {}, {}, {}
 	for _, f in ipairs(Config.Faults) do
-		if not f.rare then
+		if f.gearbox then
+			-- коробка: только неисправности своей КПП
+			if f.gearbox == gearbox then
+				table.insert(boxPool, f)
+			end
+		elseif not f.rare and not f.season then
 			if isRecent[f.id] then
 				table.insert(backup, f)
 			else
@@ -1838,6 +1874,9 @@ local function rollFaults(plot)
 	if not isRecent.engine and math.random() < 0.15 then
 		table.insert(list, Config.FaultById.engine)
 		maxN = 1
+	elseif #boxPool > 0 and math.random() < (Config.GearboxFaultChance or 0.35) then
+		table.insert(list, boxPool[math.random(1, #boxPool)])
+		maxN = 2
 	end
 	local n = math.random(1, maxN)
 	for _ = 1, n do
@@ -1996,7 +2035,7 @@ local function snapshot(p, bayIndex)
 				f.stepIdx = fs.stepIdx
 				f.stepCount = #steps
 				if st then
-					local s = { type = st.type, label = st.label, time = st.time }
+					local s = { type = st.type, label = st.label, time = st.time, wait = st.wait }
 					s.atName = "у машины (пост " .. bay.localIdx .. ")"
 					if st.at then
 						s.atName = Config.Stations[st.at]
@@ -2139,6 +2178,9 @@ local function checkCarDone(bay)
 			if rt and rt >= 4.5 then
 				tip = tip * (1 + (Config.StarTipBonus or 0.2))
 			end
+			if job.vip then
+				tip = tip * (Config.VipRewardMult or 1.5)
+			end
 			local bonus = addCash(p, tip, true)
 			sfx(bay.pos, "cash")
 			notify(p, "🚗 " .. job.name .. " готова! Бонус от клиента: +$" .. bonus, "good")
@@ -2162,6 +2204,9 @@ local function completeFault(bay, fs, p, share)
 	local base = rewardOf(fs) * share
 	if fs.greased then
 		base = base * 1.15
+	end
+	if bay.job and bay.job.vip then
+		base = base * (Config.VipRewardMult or 1.5)
 	end
 	base = math.floor(base)
 	if p.Parent and bay.job then
@@ -2272,14 +2317,54 @@ spawnCar = function(plot, opts)
 		end
 		return
 	end
-	local cm = Config.CarModels[math.random(1, #Config.CarModels)]
-	local car = buildCar(cm)
-	local job = { name = cm.name, model = car, faults = {}, earnings = {}, ready = false, tutorial = opts and opts.tutorial or nil, spot = spot, plot = plot }
+	local owner = plot.owner
+	local vip = not (opts and opts.tutorial) and owner and owner:GetAttribute("Pass_vip") and #(Config.VipCarModels or {}) > 0 and math.random() < (Config.VipCarChance or 0.3)
+	local cm, car
+	if vip then
+		cm = Config.VipCarModels[math.random(1, #Config.VipCarModels)]
+		car = buildCar(cm, false, Config.VipCarColors[math.random(1, #Config.VipCarColors)])
+	else
+		cm = Config.CarModels[math.random(1, #Config.CarModels)]
+		car = buildCar(cm)
+	end
+	-- коробка передач (взвешенный случайный выбор)
+	local gearbox = Config.Gearboxes[1]
+	do
+		local total = 0
+		for _, g in ipairs(Config.Gearboxes) do
+			total = total + (g.weight or 1)
+		end
+		local r = math.random() * total
+		for _, g in ipairs(Config.Gearboxes) do
+			r = r - (g.weight or 1)
+			if r <= 0 then
+				gearbox = g
+				break
+			end
+		end
+	end
+	local title = (vip and "⭐ VIP · " or "") .. cm.name .. " · " .. gearbox.name
+	local job = { name = title, model = car, faults = {}, earnings = {}, ready = false, tutorial = opts and opts.tutorial or nil, spot = spot, plot = plot, vip = vip or nil, gearbox = gearbox.id }
 	spot.job = job
 	if job.tutorial then
 		plot.tutJob = job
 	end
-	local list = job.tutorial and { Config.FaultById.oil } or rollFaults(plot)
+	local list = job.tutorial and { Config.FaultById.oil } or rollFaults(plot, gearbox.id)
+	-- сезонная переобувка
+	if not job.tutorial then
+		local swap = nil
+		if World.season == "winter" then
+			swap = Config.FaultById.winter_tires
+		elseif (World.summerSwapLeft or 0) > 0 then
+			swap = Config.FaultById.summer_tires
+		end
+		if swap and math.random() < (Config.TireSwapChance or 0.55) then
+			table.insert(list, 1, swap)
+			while #list > 3 do
+				table.remove(list)
+			end
+		end
+	end
 	for _, def in ipairs(list) do
 		table.insert(job.faults, { def = def, revealed = not def.hidden, done = false, stepIdx = 0, busyUntil = 0, bayIndex = 0, forceRust = opts and opts.forceRust or nil })
 	end
@@ -2542,6 +2627,34 @@ local function handleBolt(p, fs, arg)
 		end
 	end
 
+	-- VIP-гайковёрт: все болты шага разом (кроме сорванных — их выкручивают экстрактором)
+	if method == "vip" then
+		if not owns(p, "vip_impact") then
+			notify(p, "⭐ VIP-гайковёрт есть только у владельцев VIP-пасса (Компьютер → Донат)", "bad")
+			return
+		end
+		local n = 0
+		for _, s in pairs(fs.bolts) do
+			if s ~= "done" and s ~= "broken" then
+				n = n + 1
+			end
+		end
+		if n == 0 then
+			notify(p, "Остались только сорванные болты 💥 — выкрутите их по одному", "info")
+			return
+		end
+		sfx(bpos(fs), "impact")
+		busy(fs, 1.5, "⭐ VIP-гайковёрт: откручиваем все болты разом (" .. n .. " шт.)...", function()
+			for i, s in pairs(fs.bolts) do
+				if s ~= "broken" then
+					fs.bolts[i] = "done"
+				end
+			end
+			after()
+		end)
+		return
+	end
+
 	if method == "wd40" then
 		if state ~= "rusty" then
 			notify(p, "WD-40 нужен только для ржавых болтов 🟤", "info")
@@ -2640,7 +2753,11 @@ local function handleStep(p, fs, st, arg)
 			end
 		end
 		sfx(bpos(fs), st.sound or (st.tighten and "wrench") or "action")
-		busy(fs, st.time or 2, st.label .. "...", function()
+		local lbl = st.wait and ("⏳ " .. st.label .. " — можно пока заняться другой машиной") or (st.label .. "...")
+		busy(fs, st.time or 2, lbl, function()
+			if st.wait and p.Parent then
+				notify(p, "⏳ Готово: «" .. st.label .. "» (пост " .. (Bays[fs.bayIndex] and Bays[fs.bayIndex].localIdx or "?") .. ")", "info")
+			end
 			advance(fs, p)
 		end)
 	elseif st.type == "torque" then
@@ -3069,6 +3186,7 @@ local function grantPass(p, key)
 	elseif key == "vip" then
 		applyVipTag(p)
 		Hooks.refreshSigns(p)
+		p:SetAttribute("Own_vip_impact", true)
 	elseif key == "extra_lift" then
 		local pl = plotOf(p)
 		if pl then
@@ -3199,6 +3317,9 @@ ShopFunction.OnServerInvoke = function(p, action, id, qty)
 			end)
 			return true, "Заказ оформлен: " .. it.name .. " x" .. n .. ". Доставка через " .. Config.DeliveryTime .. " сек."
 		else
+			if it.vip then
+				return false, "⭐ Выдаётся вместе с VIP-пассом (вкладка «Донат»)"
+			end
 			if owns(p, id) then
 				return false, "Уже куплено"
 			end
@@ -3325,7 +3446,7 @@ local function save(p)
 			if n > 0 then
 				data.inv[it.id] = n
 			end
-		elseif owns(p, it.id) then
+		elseif owns(p, it.id) and not it.vip then
 			data.own[it.id] = true
 		end
 	end
@@ -3472,11 +3593,23 @@ for i, s in ipairs(Config.Tutorial) do
 end
 local TUT_CAR = { tutorial = true, forceRust = true, spot = 1 }
 
+-- сколько стоят запчасти на первый ремонт (масло + фильтр)
+local function tutPartsCost()
+	local sum = 0
+	for _, st in ipairs(Config.FaultById.oil.steps) do
+		for id, n in pairs(st.items or {}) do
+			sum = sum + (Config.ItemById[id] and Config.ItemById[id].price or 0) * n
+		end
+	end
+	return sum
+end
+
 local Dialog1 = {
 	"Ну здравствуй, новый хозяин! Сорок лет я тут гайки крутил...",
-	"Мастерская старая, да крепкая. За стеклом — бокс на три поста, тут — холл для клиентов.",
+	"Мастерская старая, да крепкая. За стеклом — бокс на четыре поста, тут — холл для клиентов.",
 	"Инструмент я весь распродал, уж не серчай. Зато компьютер на стойке работает.",
 	"Закажи моторное масло (вкладка «Тех. жидкости») и масляный фильтр. Первый клиент уже звонил — ему масло поменять. Менять будем из ямы на первом посту — домкрат не нужен.",
+	"Только вот денег у тебя — кот наплакал, на запчасти не хватит. Не беда: выйди на улицу, найди 🏦 БАНК и возьми кредит $150. Процентов там нет — отдашь, когда клиенты заплатят.",
 }
 local Dialog2 = {
 	"Вот это я понимаю! Руки из нужного места растут.",
@@ -3489,6 +3622,14 @@ local function tutTarget(plot, id)
 		return plot.L(0, 5, 44)
 	elseif id == "buy" or id == "wait" then
 		return plot.computerPos + Vector3.new(-3, 6, 0)
+	elseif id == "bank" then
+		local best
+		for _, pos in ipairs(BankDoors) do
+			if not best or (pos - plot.origin).Magnitude < (best - plot.origin).Magnitude then
+				best = pos
+			end
+		end
+		return best and (best + Vector3.new(0, 6, 2)) or nil
 	elseif id == "car" then
 		return plot.parking[1].pos + Vector3.new(0, 6, 0)
 	elseif id == "repair" then
@@ -3541,7 +3682,7 @@ onMentorTalk = function(p)
 	end
 	if d.tutStage == "talk1" then
 		StoryEvent:FireClient(p, "dialog", { speaker = Config.MentorName, lines = Dialog1 })
-		setTut(p, "buy")
+		setTut(p, getCash(p) < tutPartsCost() and "bank" or "buy")
 	elseif d.tutStage == "talk2" or d.tutStage == "name" then
 		StoryEvent:FireClient(p, "dialog", { speaker = Config.MentorName, lines = Dialog2, after = "name" })
 		setTut(p, "name")
@@ -3586,6 +3727,10 @@ task.spawn(function()
 		task.wait(1)
 		for p, d in pairs(PD) do
 			local plot = plotOf(p)
+			if plot and d.loaded and not d.tut and d.tutStage == "bank" and getCash(p) >= tutPartsCost() then
+				setTut(p, "buy")
+				notify(p, "🏦 Деньги есть! Теперь к компьютеру на стойке — закажите масло и фильтр.", "good")
+			end
 			if plot and d.loaded and not d.tut and (d.tutStage == "buy" or d.tutStage == "wait") then
 				local hasTools = true -- замена масла идёт из ямы, домкрат и стойки не нужны
 				local hasParts = true
@@ -3785,6 +3930,9 @@ local function onPlayerAdded(p)
 			end
 		end
 	end
+	if p:GetAttribute("Pass_vip") then
+		p:SetAttribute("Own_vip_impact", true)
+	end
 	Hooks.refreshSigns(p)
 
 	p.CharacterAdded:Connect(function(char)
@@ -3824,6 +3972,46 @@ for k = 1, Config.MaxPlots do
 	refreshEquipment(buildPlot(k))
 end
 
+-- СЕЗОНЫ: зимой земля под снегом, идёт снег, клиенты едут на зимнюю резину; после таяния — на летнюю
+local groundLook = {}
+for _, d in ipairs(world:GetDescendants()) do
+	if d:IsA("BasePart") and d.Name == "Ground" then
+		groundLook[d] = { d.Color, d.Material }
+	end
+end
+local function setSeason(season)
+	local first = World.seasonLeft == 0 and season == "summer"
+	World.season = season
+	World.seasonLeft = season == "winter" and (Config.WinterDays or 3) or (Config.SummerDays or 3)
+	workspace:SetAttribute("Season", season)
+	for part, look in pairs(groundLook) do
+		if season == "winter" then
+			part.Color = Color3.fromRGB(235, 240, 245)
+			part.Material = Enum.Material.Snow
+		else
+			part.Color = look[1]
+			part.Material = look[2]
+		end
+	end
+	if first then
+		return
+	end
+	local msg
+	if season == "winter" then
+		World.weather = "snow"
+		msg = "❄ Пришла зима! Выпал снег — клиенты поедут переобуваться на ЗИМНЮЮ резину. Закажите зимние шины (Компьютер → Запчасти)."
+	else
+		World.weather = "clear"
+		World.summerSwapLeft = Config.SummerSwapDays or 1
+		msg = "🌱 Снег растаял! Клиенты поедут переобуваться обратно на ЛЕТНЮЮ резину. Закажите летние шины."
+	end
+	workspace:SetAttribute("Weather", World.weather)
+	for _, p in ipairs(Players:GetPlayers()) do
+		notify(p, msg, "info")
+	end
+end
+setSeason("summer")
+
 -- время суток, погода и подарки дня (игрок не может обанкротиться)
 task.spawn(function()
 	local dayLen = Config.DayLength or 720
@@ -3849,6 +4037,11 @@ task.spawn(function()
 		World.clock = (World.clock + dt * 24 / dayLen) % 24
 		if World.clock < prev then
 			World.day = World.day + 1
+			World.summerSwapLeft = math.max(0, (World.summerSwapLeft or 0) - 1)
+			World.seasonLeft = World.seasonLeft - 1
+			if World.seasonLeft <= 0 then
+				setSeason(World.season == "winter" and "summer" or "winter")
+			end
 		end
 		Lighting.ClockTime = World.clock
 		local isNight = World.clock >= (Config.NightStart or 21) or World.clock < (Config.NightEnd or 6)
@@ -3862,7 +4055,11 @@ task.spawn(function()
 		if now >= nextWeather then
 			nextWeather = nextW()
 			local r = math.random()
-			World.weather = (r < 0.5 and "clear") or (r < 0.75 and "cloudy") or "rain"
+			if World.season == "winter" then
+				World.weather = (r < 0.65 and "snow") or (r < 0.85 and "cloudy") or "clear"
+			else
+				World.weather = (r < 0.5 and "clear") or (r < 0.75 and "cloudy") or "rain"
+			end
 			workspace:SetAttribute("Weather", World.weather)
 			if atm then
 				local add = (World.weather == "rain" and 0.2) or (World.weather == "cloudy" and 0.1) or 0
@@ -3870,7 +4067,7 @@ task.spawn(function()
 				atm.Haze = baseHaze + add * 8
 			end
 		end
-		Lighting.Brightness = isNight and 1 or ((World.weather == "rain" and 1.7) or (World.weather == "cloudy" and 2.1) or 2.6)
+		Lighting.Brightness = isNight and 1 or ((World.weather == "rain" and 1.7) or ((World.weather == "cloudy" or World.weather == "snow") and 2.1) or 2.6)
 		workspace:SetAttribute("Clock", World.clock)
 		workspace:SetAttribute("Day", World.day)
 		workspace:SetAttribute("Night", isNight)

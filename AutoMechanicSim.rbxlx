@@ -3,7 +3,7 @@
 
 local Config = {}
 
-Config.StartCash = 800
+Config.StartCash = 30            -- мало специально: в обучении первую машину чиним на кредит из банка
 Config.DeliveryTime = 8          -- секунд до доставки заказа (администратор = мгновенно)
 Config.CarCompleteBonus = 0.25   -- бонус за полностью отремонтированную машину
 Config.BrokenBoltFee = 50        -- штраф за сорванный болт без экстрактора
@@ -168,6 +168,28 @@ Config.Items = {
 	{ id = "extractor",       cat = "tool", name = "Экстрактор болтов",       price = 120, desc = "Выкручивает сорванный болт без штрафа" },
 	{ id = "valve_tool",      cat = "tool", name = "Рассухариватель клапанов", price = 150, desc = "Сжимает пружины — нужен для замены клапанов" },
 	{ id = "ring_compressor", cat = "tool", name = "Оправка для поршневых колец", price = 100, desc = "Нужна, чтобы вставить поршни в цилиндры" },
+	{ id = "vip_impact",    cat = "tool", vip = true, name = "⭐ VIP-гайковёрт", price = 0, desc = "Только с VIP-пассом: откручивает все болты шага разом (и все 4 колеса при переобувке), даже ржавые" },
+
+	-- СЕЗОННЫЕ ШИНЫ (зимой клиенты едут переобуваться на зимнюю, после таяния снега — на летнюю)
+	{ id = "winter_tire",   cat = "part", name = "Зимняя шина (шипованная)", price = 90, desc = "Переобувка на зиму: нужно 4 шт. на машину" },
+	{ id = "summer_tire",   cat = "part", name = "Летняя шина",             price = 80, desc = "Переобувка на лето: нужно 4 шт. на машину" },
+
+	-- КОРОБКИ ПЕРЕДАЧ (вкладка «⚙ КПП»)
+	{ id = "gear_oil",      cat = "fluid", group = "trans", name = "Трансмиссионное масло 75W-90 (МКПП)", price = 35, desc = "Только для механической коробки" },
+	{ id = "mt_filter",     cat = "part",  group = "trans", name = "Фильтр-сетка МКПП",            price = 20,  desc = "Меняется вместе с маслом МКПП" },
+	{ id = "clutch_kit",    cat = "part",  group = "trans", name = "Комплект сцепления (МКПП)",    price = 220, desc = "Диск, корзина, выжимной подшипник — буксует сцепление" },
+	{ id = "mt_synchro",    cat = "part",  group = "trans", name = "Синхронизаторы МКПП (компл.)", price = 160, desc = "Хрустят передачи при включении" },
+	{ id = "mt_bearing",    cat = "part",  group = "trans", name = "Подшипник первичного вала МКПП", price = 70, desc = "Гул в коробке" },
+	{ id = "atf",           cat = "fluid", group = "trans", name = "Жидкость ATF (АКПП)",          price = 45,  desc = "Только для автомата" },
+	{ id = "at_filter",     cat = "part",  group = "trans", name = "Фильтр АКПП",                  price = 35,  desc = "Меняется вместе с ATF" },
+	{ id = "at_solenoid",   cat = "part",  group = "trans", name = "Блок соленоидов АКПП",         price = 190, desc = "Ошибка P0750 — коробка пинается" },
+	{ id = "at_clutches",   cat = "part",  group = "trans", name = "Фрикционы АКПП (компл.)",      price = 260, desc = "Переборка: коробка буксует" },
+	{ id = "at_torque",     cat = "part",  group = "trans", name = "Гидротрансформатор АКПП",      price = 380, desc = "Переборка АКПП" },
+	{ id = "cvt_fluid",     cat = "fluid", group = "trans", name = "Жидкость CVT (вариатор)",      price = 55,  desc = "Только для вариатора" },
+	{ id = "cvt_filter",    cat = "part",  group = "trans", name = "Фильтр вариатора",             price = 40,  desc = "Меняется вместе с жидкостью CVT" },
+	{ id = "cvt_belt",      cat = "part",  group = "trans", name = "Ремень вариатора",             price = 300, desc = "Вариатор гудит и дёргается" },
+	{ id = "cvt_pulley",    cat = "part",  group = "trans", name = "Шкив вариатора",               price = 240, desc = "Задиры на шкивах — гул" },
+	{ id = "cvt_valve",     cat = "part",  group = "trans", name = "Клапан давления вариатора",    price = 150, desc = "Ошибка P0868 — падает давление" },
 
 	-- ОБОРУДОВАНИЕ (навсегда)
 	{ id = "lift",          cat = "equip", name = "Подъёмник",               price = 1500, desc = "Работы снизу: лямбда, двигатель. Заменяет домкрат со стойками (на посту с ямой лямбду можно менять и без него)" },
@@ -211,12 +233,15 @@ local function B(n, rust, label, at) return { type = "bolts", count = n, rust = 
 local function A(label, time, items, tools, at) return { type = "action", label = label, time = time, items = items, tools = tools, at = at } end
 local function T(label, at) return { type = "torque", label = label, at = at } end
 local function G(label) return { type = "grease", label = label } end
+-- ожидание (до 5 мин): шаг запускается кнопкой и идёт сам — можно заниматься другой машиной
+local function W(label, time, at) return { type = "action", label = label, time = math.min(time, 300), wait = true, at = at } end
 
 Config.Faults = {
 	{ id = "oil", name = "Пора менять масло", worker = "mechanic", reward = 130,
 	  steps = {
 		B(1, 0.3, "Открутить сливную пробку"),
 		A("Слить старое масло", 3),
+		W("Дать старому маслу стечь", 30),
 		A("Заменить масляный фильтр", 2, { oil_filter = 1 }),
 		A("Закрутить сливную пробку ключом", 1.5),
 		A("Залить новое масло", 3, { oil = 1 }),
@@ -299,9 +324,104 @@ Config.Faults = {
 		B(6, 0.3, "Открутить болты ГБЦ"),
 		A("Отмыть ГБЦ и болты бензином", 4, { gasoline = 1 }, nil, "parts_washer"),
 		A("Поставить новую прокладку на герметик", 3, { gasket_head = 1, sealant = 1 }),
+		W("Герметик схватывается", 120),
 		A("Затянуть болты ГБЦ по схеме", 3),
 		A("Залить антифриз", 2, { coolant = 1 }),
 	  } },
+	-- СЕЗОННАЯ СМЕНА РЕЗИНЫ (приезжают только зимой / сразу после таяния снега). VIP-гайковёрт снимает все 4 колеса разом
+	{ id = "winter_tires", season = "winter", name = "Переобуть на зимнюю резину", worker = "mechanic", reward = 380, lift = "jack",
+	  steps = {
+		B(16, 0.15, "Снять 4 колеса (16 болтов)"),
+		A("Перебортировать 4 шины на зимние", 8, { winter_tire = 4 }, nil, "tire_changer"),
+		A("Отбалансировать 4 колеса", 6, { weights = 4 }, nil, "balancer"),
+		A("Поставить 4 колеса и затянуть болты", 4),
+	  } },
+	{ id = "summer_tires", season = "summer", name = "Переобуть на летнюю резину", worker = "mechanic", reward = 380, lift = "jack",
+	  steps = {
+		B(16, 0.2, "Снять 4 колеса (16 болтов)"),
+		A("Перебортировать 4 шины на летние", 8, { summer_tire = 4 }, nil, "tire_changer"),
+		A("Отбалансировать 4 колеса", 6, { weights = 4 }, nil, "balancer"),
+		A("Поставить 4 колеса и затянуть болты", 4),
+	  } },
+
+	-- КОРОБКИ ПЕРЕДАЧ: неисправность выпадает только машине с подходящей коробкой (gearbox = mt / at / cvt)
+	{ id = "mt_service", gearbox = "mt", name = "МКПП: замена трансмиссионного масла", worker = "mechanic", reward = 210, lift = "jack", pit = true,
+	  steps = {
+		B(1, 0.4, "Открутить сливную пробку КПП"),
+		A("Слить старое масло МКПП", 3),
+		W("Дать маслу стечь", 60),
+		A("Промыть и заменить фильтр-сетку", 2, { mt_filter = 1 }),
+		A("Залить трансмиссионное масло", 3, { gear_oil = 1 }),
+	  } },
+	{ id = "mt_clutch", gearbox = "mt", name = "Буксует сцепление (МКПП)", reward = 520, lift = "lift",
+	  steps = {
+		B(6, 0.3, "Открутить МКПП от двигателя"),
+		A("Снять коробку передач", 5),
+		A("Заменить комплект сцепления", 5, { clutch_kit = 1 }),
+		A("Поставить коробку и затянуть болты", 4),
+		A("Долить трансмиссионное масло", 2, { gear_oil = 1 }),
+	  } },
+	{ id = "mt_repair", gearbox = "mt", name = "Хрустят передачи, гул в МКПП", reward = 640, lift = "lift",
+	  steps = {
+		B(6, 0.3, "Открутить МКПП от двигателя"),
+		B(8, 0.25, "Разобрать картер коробки"),
+		A("Заменить синхронизаторы", 5, { mt_synchro = 1 }),
+		A("Заменить подшипник первичного вала", 4, { mt_bearing = 1 }),
+		A("Собрать картер на герметик", 3, { sealant = 1 }),
+		W("Герметик картера схватывается", 150),
+		A("Поставить коробку и залить масло", 4, { gear_oil = 1, mt_filter = 1 }),
+	  } },
+	{ id = "at_service", gearbox = "at", name = "АКПП: замена ATF и фильтра", worker = "mechanic", reward = 260, lift = "jack", pit = true,
+	  steps = {
+		B(1, 0.3, "Открутить сливную пробку АКПП"),
+		A("Слить старую ATF", 3),
+		B(4, 0.2, "Открутить поддон АКПП"),
+		A("Заменить фильтр АКПП", 3, { at_filter = 1 }),
+		A("Поставить поддон и залить ATF", 4, { atf = 2 }),
+		W("Прогреть коробку и проверить уровень", 90),
+	  } },
+	{ id = "at_solenoid", gearbox = "at", hidden = true, code = "P0750", name = "АКПП пинается — неисправны соленоиды", reward = 450, lift = "jack", pit = true,
+	  steps = {
+		B(4, 0.2, "Открутить поддон АКПП"),
+		A("Снять гидроблок", 4),
+		A("Заменить блок соленоидов", 4, { at_solenoid = 1 }),
+		A("Собрать и долить ATF", 3, { atf = 1 }),
+		A("Адаптация АКПП сканером", 3, nil, { "scanner" }),
+	  } },
+	{ id = "at_overhaul", gearbox = "at", name = "АКПП буксует — переборка", reward = 820, lift = "lift",
+	  steps = {
+		B(8, 0.3, "Открутить АКПП от двигателя"),
+		A("Снять АКПП", 5),
+		A("Заменить фрикционы", 6, { at_clutches = 1 }),
+		A("Заменить гидротрансформатор", 5, { at_torque = 1 }),
+		A("Поставить АКПП, новый фильтр и ATF", 5, { at_filter = 1, atf = 3 }),
+		W("Адаптация и прогрев АКПП", 240),
+	  } },
+	{ id = "cvt_service", gearbox = "cvt", name = "Вариатор: замена жидкости CVT и фильтра", worker = "mechanic", reward = 280, lift = "jack", pit = true,
+	  steps = {
+		B(1, 0.3, "Открутить сливную пробку вариатора"),
+		A("Слить старую жидкость CVT", 3),
+		W("Дать жидкости стечь", 60),
+		A("Заменить фильтр вариатора", 3, { cvt_filter = 1 }),
+		A("Залить жидкость CVT", 3, { cvt_fluid = 2 }),
+	  } },
+	{ id = "cvt_valve", gearbox = "cvt", hidden = true, code = "P0868", name = "Вариатор: падает давление", reward = 420, lift = "jack", pit = true,
+	  steps = {
+		B(4, 0.2, "Открутить поддон вариатора"),
+		A("Заменить клапан давления", 4, { cvt_valve = 1 }),
+		A("Долить жидкость CVT", 2, { cvt_fluid = 1 }),
+		A("Сбросить ошибку сканером", 2, nil, { "scanner" }),
+	  } },
+	{ id = "cvt_repair", gearbox = "cvt", name = "Вариатор гудит и дёргается", reward = 760, lift = "lift",
+	  steps = {
+		B(8, 0.3, "Открутить вариатор от двигателя"),
+		A("Снять вариатор", 5),
+		A("Заменить ремень вариатора", 5, { cvt_belt = 1 }),
+		A("Заменить шкив", 5, { cvt_pulley = 1 }),
+		A("Поставить вариатор, фильтр и жидкость", 5, { cvt_filter = 1, cvt_fluid = 3 }),
+		W("Адаптация вариатора", 180),
+	  } },
+
 	-- ДВИГАТЕЛЬ: два варианта ремонта
 	{ id = "engine", name = "Стук в двигателе", lift = "lift", rare = true,
 	  variants = {
@@ -324,6 +444,7 @@ Config.Faults = {
 			A("Заменить поршни и кольца", 5, { pistons = 1, assembly_lube = 1 }, { "ring_compressor" }, "engine_stand"),
 			A("Заменить шатуны и вкладыши", 4, { rods = 1, assembly_lube = 1 }, nil, "engine_stand"),
 			A("Поставить все прокладки на герметик", 4, { gasket_set = 1, sealant = 1 }, nil, "engine_stand"),
+			W("Герметик прокладок схватывается", 300, "engine_stand"),
 			T("Собрать двигатель с моментом затяжки", "engine_stand"),
 			A("Вернуть двигатель в машину краном", 5, nil, { "hoist" }),
 			A("Залить масло и антифриз", 3, { oil = 1, coolant = 1 }),
@@ -371,6 +492,34 @@ Config.CarModels = {
 	{ name = "Шкода Октавия универсал", body = "wagon" },
 	{ name = "Лэнд Крузер", body = "suv" },
 }
+-- КОРОБКИ ПЕРЕДАЧ у машин клиентов (weight = как часто встречается)
+Config.Gearboxes = {
+	{ id = "mt",  name = "МКПП",     weight = 4 },
+	{ id = "at",  name = "АКПП",     weight = 4 },
+	{ id = "cvt", name = "Вариатор", weight = 2 },
+}
+Config.GearboxFaultChance = 0.35   -- шанс, что у машины будет неисправность коробки
+
+-- СЕЗОНЫ: лето и долгая снежная зима (в игровых сутках; сутки = DayLength сек)
+Config.SummerDays = 3
+Config.WinterDays = 3              -- 3 игровых суток = 36 минут снега
+Config.TireSwapChance = 0.55       -- зимой: шанс, что клиент едет переобуваться на зимнюю
+Config.SummerSwapDays = 1          -- сколько игровых суток после таяния клиенты едут на летнюю резину
+
+-- VIP-КЛИЕНТЫ (только у владельцев VIP-пасса)
+-- Свои модели: создайте в ServerStorage папку VipCarModels и положите туда модели машин (как в CarModels).
+-- Они добавятся сами. Если папка пуста — приезжают блочные машины из списка ниже в «премиальных» цветах.
+Config.VipCarChance = 0.3          -- доля VIP-клиентов
+Config.VipRewardMult = 1.5         -- VIP-клиент платит в 1.5 раза больше (и ремонт, и чаевые)
+Config.VipCarModels = {
+	{ name = "Мерседес S-класс", body = "sedan" },
+	{ name = "Порше 911", body = "coupe" },
+	{ name = "Рендж Ровер", body = "suv" },
+}
+Config.VipCarColors = {
+	Color3.fromRGB(15, 15, 18), Color3.fromRGB(212, 175, 55), Color3.fromRGB(235, 235, 240), Color3.fromRGB(110, 20, 30),
+}
+
 Config.CarColors = {
 	Color3.fromRGB(200, 40, 40), Color3.fromRGB(40, 90, 200), Color3.fromRGB(240, 240, 240),
 	Color3.fromRGB(30, 30, 30), Color3.fromRGB(60, 150, 70), Color3.fromRGB(230, 180, 40),
@@ -393,10 +542,11 @@ Config.IntroLines = {
 }
 Config.Tutorial = {
 	{ id = "talk1",   text = "Поговорите с дедом Михалычем у входа" },
+	{ id = "bank",    text = "Денег на запчасти не хватает! Выйдите на улицу, найдите 🏦 БАНК и возьмите кредит без процентов $150" },
 	{ id = "buy",     text = "Компьютер на стойке администратора: закажите Моторное масло (вкладка «Тех. жидкости») и Масляный фильтр (вкладка «Запчасти»)" },
 	{ id = "wait",    text = "Ждите доставку деталей на склад" },
 	{ id = "car",     text = "Первый клиент на парковке за мастерской! Подойдите к машине, нажмите E «Сесть за руль» и отгоните её на пост 1 (с ямой)" },
-	{ id = "repair",  text = "Нажмите E «Осмотреть» у машины, начните «Пора менять масло» и выполните шаги (спуститесь в яму). Ржавый болт 🟤 лучше обработать WD-40" },
+	{ id = "repair",  text = "Нажмите E «Осмотреть» у машины, начните «Пора менять масло» и выполните шаги (спуститесь в яму). Ржавый болт 🟤 лучше обработать WD-40. Шаг ⏳ идёт сам — просто подождите" },
 	{ id = "talk2",   text = "Отлично! Поговорите с Михалычем ещё раз" },
 	{ id = "name",    text = "Придумайте название своей мастерской" },
 }
@@ -667,7 +817,145 @@ B.weights = function(m)
 	add(m, "B", V(2.4, 0.05, 0.4), V(0, 0.02, 0), C.dark)
 end
 
+---------------------------------------------------------------- СЕЗОННЫЕ ШИНЫ
+local function seasonTire(m, studs, stripe)
+	add(m, "C", V(0.9, 2.6, 2.6), V(0, 1.3, 0), C.rubber, MAT.Fabric)
+	add(m, "C", V(0.92, 1.7, 1.7), V(0, 1.3, 0), rgb(55, 55, 58), MAT.Fabric)
+	add(m, "C", V(0.95, 1.45, 1.45), V(0, 1.3, 0), rgb(12, 12, 12))
+	-- цветная полоса на боковине: синяя = зима, жёлтая = лето
+	add(m, "C", V(0.94, 2.0, 2.0), V(0, 1.3, 0), stripe, MAT.SmoothPlastic)
+	add(m, "C", V(0.96, 1.85, 1.85), V(0, 1.3, 0), rgb(55, 55, 58), MAT.Fabric)
+	for i = 0, 15 do
+		local a = math.rad(i * 22.5)
+		add(m, "B", V(0.95, 0.16, 0.28), V(0, 1.3 + math.cos(a) * 1.27, math.sin(a) * 1.27), rgb(18, 18, 18), MAT.Fabric, V(-i * 22.5, 0, 0))
+		if studs then
+			add(m, "S", V(0.12, 0.12, 0.12), V(0.3, 1.3 + math.cos(a) * 1.32, math.sin(a) * 1.32), C.chrome, MAT.Metal)
+			add(m, "S", V(0.12, 0.12, 0.12), V(-0.3, 1.3 + math.cos(a + 0.2) * 1.32, math.sin(a + 0.2) * 1.32), C.chrome, MAT.Metal)
+		end
+	end
+end
+B.winter_tire = function(m)
+	seasonTire(m, true, rgb(80, 160, 240))
+	add(m, "B", V(0.1, 0.5, 0.08), V(0.5, 1.3, 0), C.white) -- снежинка
+	add(m, "B", V(0.1, 0.08, 0.5), V(0.5, 1.3, 0), C.white)
+end
+B.summer_tire = function(m)
+	seasonTire(m, false, C.yellow)
+	add(m, "V", V(0.35, 0.1, 0.35), V(0.5, 1.3, 0), C.yellow, nil, V(0, 0, 90)) -- солнце
+end
+
+---------------------------------------------------------------- КОРОБКИ ПЕРЕДАЧ
+local function canister(m, body, label, h)
+	add(m, "B", V(1.2, h, 0.7), V(0, h / 2, 0), body)
+	add(m, "B", V(0.9, h * 0.45, 0.72), V(0, h * 0.5, 0), label)
+	add(m, "V", V(0.35, 0.3, 0.35), V(-0.3, h + 0.15, 0), C.black)
+	add(m, "B", V(0.3, 0.45, 0.4), V(0.35, h + 0.1, 0), body)
+end
+B.gear_oil = function(m)
+	canister(m, rgb(40, 90, 50), C.white, 1.9)
+	add(m, "B", V(0.5, 0.12, 0.74), V(0, 0.95, 0), rgb(40, 90, 50)) -- «МКПП»
+end
+B.atf = function(m)
+	canister(m, C.red, C.white, 1.9)
+	add(m, "B", V(0.6, 0.12, 0.74), V(0, 0.95, 0), C.red)
+end
+B.cvt_fluid = function(m)
+	canister(m, rgb(120, 60, 170), C.white, 1.9)
+	add(m, "B", V(0.6, 0.12, 0.74), V(0, 0.95, 0), rgb(120, 60, 170))
+end
+-- фильтры: сетка МКПП, плоский фильтр АКПП, цилиндрический фильтр вариатора
+B.mt_filter = function(m)
+	add(m, "B", V(1.6, 0.15, 1.1), V(0, 0.1, 0), C.steel, MAT.Metal)
+	for i = -3, 3 do
+		add(m, "B", V(0.04, 0.17, 1.0), V(i * 0.2, 0.12, 0), C.dark, MAT.Metal)
+	end
+	add(m, "V", V(0.3, 0.4, 0.3), V(0.6, 0.35, 0), C.steel, MAT.Metal)
+end
+B.at_filter = function(m)
+	add(m, "B", V(1.8, 0.35, 1.2), V(0, 0.2, 0), C.black)
+	add(m, "B", V(1.5, 0.37, 0.9), V(0, 0.2, 0), C.red)
+	add(m, "V", V(0.35, 0.5, 0.35), V(0.6, 0.55, 0), C.black)
+end
+B.cvt_filter = function(m)
+	add(m, "V", V(0.9, 1.3, 0.9), V(0, 0.65, 0), rgb(120, 60, 170))
+	add(m, "V", V(0.75, 0.12, 0.75), V(0, 1.35, 0), C.steel, MAT.Metal)
+	add(m, "V", V(0.3, 0.05, 0.3), V(0, 1.43, 0), C.dark)
+end
+-- МКПП
+B.clutch_kit = function(m)
+	add(m, "C", V(0.3, 2.2, 2.2), V(0, 1.1, 0), C.steel, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.32, 1.7, 1.7), V(0, 1.1, 0), C.dark, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.25, 1.9, 1.9), V(0, 1.1, -0.35), C.brown, MAT.Sand, V(0, 90, 0))
+	add(m, "C", V(0.5, 0.5, 0.5), V(0, 1.1, 0.1), C.chrome, MAT.Metal, V(0, 90, 0))
+end
+B.mt_synchro = function(m)
+	for i = 0, 2 do
+		add(m, "C", V(0.25, 1.3, 1.3), V(0, 0.15 + i * 0.3, 0), C.copper, MAT.Metal, V(0, 0, 90))
+		add(m, "C", V(0.27, 0.9, 0.9), V(0, 0.15 + i * 0.3, 0), C.dark, nil, V(0, 0, 90))
+	end
+end
+B.mt_bearing = function(m)
+	add(m, "C", V(0.5, 1.4, 1.4), V(0, 0.7, 0), C.chrome, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.52, 1.1, 1.1), V(0, 0.7, 0), C.dark, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.54, 0.6, 0.6), V(0, 0.7, 0), C.chrome, MAT.Metal, V(0, 90, 0))
+	for i = 0, 7 do
+		local a = math.rad(i * 45)
+		add(m, "S", V(0.18, 0.18, 0.18), V(math.cos(a) * 0.43, 0.7 + math.sin(a) * 0.43, 0.27), C.steel, MAT.Metal)
+	end
+end
+-- АКПП
+B.at_solenoid = function(m)
+	add(m, "B", V(1.8, 0.3, 1.0), V(0, 0.15, 0), C.steel, MAT.Metal)
+	for i = 0, 3 do
+		add(m, "V", V(0.3, 0.6, 0.3), V(-0.65 + i * 0.43, 0.6, 0), C.black)
+		add(m, "B", V(0.18, 0.15, 0.25), V(-0.65 + i * 0.43, 0.97, 0), C.yellow)
+	end
+end
+B.at_clutches = function(m)
+	for i = 0, 4 do
+		add(m, "C", V(0.08, 1.6, 1.6), V(0, 0.05 + i * 0.12, 0), (i % 2 == 0) and C.brown or C.steel, (i % 2 == 0) and MAT.Sand or MAT.Metal, V(0, 0, 90))
+	end
+	add(m, "C", V(0.7, 0.6, 0.6), V(0, 0.3, 0), C.dark, nil, V(0, 0, 90))
+end
+B.at_torque = function(m)
+	add(m, "C", V(0.9, 2.2, 2.2), V(0, 1.1, 0), C.steel, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.6, 2.3, 2.3), V(0, 1.1, -0.1), C.chrome, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.5, 0.45, 0.45), V(0, 1.1, 0.55), C.dark, MAT.Metal, V(0, 90, 0))
+	for i = 0, 5 do
+		local a = math.rad(i * 60)
+		add(m, "C", V(0.2, 0.18, 0.18), V(math.cos(a) * 0.9, 1.1 + math.sin(a) * 0.9, -0.45), C.dark, MAT.Metal, V(0, 90, 0))
+	end
+end
+-- вариатор
+B.cvt_belt = function(m)
+	for i = 0, 15 do
+		local a = math.rad(i * 22.5)
+		local x, y = math.cos(a) * 1.0, math.sin(a) * 0.55
+		add(m, "B", V(0.22, 0.12, 0.35), V(x, 0.7 + y, 0), C.chrome, MAT.Metal, V(0, 0, -i * 22.5 + 90))
+	end
+end
+B.cvt_pulley = function(m)
+	add(m, "C", V(0.15, 0.4, 0.4), V(0, 0.9, 0), C.dark, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.25, 1.8, 1.8), V(0, 0.9, -0.3), C.chrome, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(0.25, 1.8, 1.8), V(0, 0.9, 0.3), C.chrome, MAT.Metal, V(0, 90, 0))
+	add(m, "C", V(1.4, 0.35, 0.35), V(0, 0.9, 0), C.steel, MAT.Metal, V(0, 90, 0))
+end
+B.cvt_valve = function(m)
+	add(m, "C", V(1.6, 0.35, 0.35), V(0, 0.3, 0), C.chrome, MAT.Metal)
+	add(m, "C", V(0.4, 0.5, 0.5), V(-0.5, 0.3, 0), rgb(120, 60, 170))
+	add(m, "B", V(0.3, 0.3, 0.3), V(-0.5, 0.65, 0), C.black)
+	add(m, "C", V(0.3, 0.42, 0.42), V(0.6, 0.3, 0), C.steel, MAT.Metal)
+end
+
 ---------------------------------------------------------------- ИНСТРУМЕНТЫ
+B.vip_impact = function(m)
+	add(m, "C", V(1.6, 0.6, 0.6), V(0, 1.4, 0), rgb(212, 175, 55), MAT.Metal)
+	add(m, "C", V(0.4, 0.4, 0.4), V(1.0, 1.4, 0), C.black)
+	add(m, "C", V(0.4, 0.25, 0.25), V(1.4, 1.4, 0), C.chrome, MAT.Metal)
+	add(m, "B", V(0.45, 1.2, 0.45), V(-0.4, 0.6, 0), C.black, nil, V(0, 0, -10))
+	add(m, "B", V(0.7, 0.5, 0.7), V(-0.5, 0.05, 0), rgb(212, 175, 55), MAT.Metal)
+	add(m, "S", V(0.35, 0.35, 0.35), V(-0.1, 1.85, 0), rgb(255, 215, 90), MAT.Neon) -- звезда VIP
+end
 B.impact = function(m)
 	add(m, "C", V(1.6, 0.6, 0.6), V(0, 1.4, 0), C.yellow)
 	add(m, "C", V(0.4, 0.4, 0.4), V(1.0, 1.4, 0), C.black)
@@ -1820,7 +2108,7 @@ pcall(function()
 end)
 
 -- ДЕНЬ / НОЧЬ / ПОГОДА (состояние; цикл запускается внизу, в блоке СТАРТ)
-local World = { night = false, clock = 8, weather = "clear", day = 1 }
+local World = { night = false, clock = 8, weather = "clear", day = 1, season = "summer", seasonLeft = 0, summerSwapLeft = 0 }
 local NightLights = {}  -- { light = PointLight, part = неоновая лампа }
 local NightWindows = {} -- окна домов, которые светятся ночью
 local function applyNight(night)
@@ -1852,6 +2140,7 @@ local LANE_Z = -66
 local Plots = {}
 local onMentorTalk -- объявлена в блоке обучения
 local Tut = {} -- хуки обучения (open, carDone, carLeft)
+local BankDoors = {} -- позиции дверей банков (цель обучения «возьмите кредит»)
 
 local function plotOf(p)
 	for _, pl in ipairs(Plots) do
@@ -2196,6 +2485,16 @@ if not carFolder then
 	carFolder.Name = "CarModels"
 	carFolder.Parent = ServerStorage
 end
+-- VIP-машины: ServerStorage → VipCarModels (приезжают только к владельцам VIP-пасса)
+local vipFolder = ServerStorage:FindFirstChild("VipCarModels")
+if not vipFolder then
+	vipFolder = Instance.new("Folder")
+	vipFolder.Name = "VipCarModels"
+	vipFolder.Parent = ServerStorage
+end
+local function folderOf(cm)
+	return cm.vip and vipFolder or carFolder
+end
 local carTemplates = {}
 
 local CAR_REMOVE = {
@@ -2303,11 +2602,12 @@ local function getCarTemplate(cm)
 	if not cm.model then
 		return nil
 	end
-	if carTemplates[cm.model] == nil then
-		local src = carFolder:FindFirstChild(cm.model)
+	local key = (cm.vip and "vip:" or "") .. cm.model
+	if carTemplates[key] == nil then
+		local src = folderOf(cm):FindFirstChild(cm.model)
 		local tpl = nil
 		if not src then
-			warn("[CarModels] в ServerStorage → CarModels нет модели «" .. cm.model .. "», будет блочная машина")
+			warn("[CarModels] в ServerStorage → " .. folderOf(cm).Name .. " нет модели «" .. cm.model .. "», будет блочная машина")
 		else
 			local ok, res = pcall(prepareCarTemplate, src, cm)
 			if ok then
@@ -2316,14 +2616,14 @@ local function getCarTemplate(cm)
 				warn("[CarModels] ошибка в модели «" .. cm.model .. "»: " .. tostring(res))
 			end
 		end
-		carTemplates[cm.model] = tpl or false
+		carTemplates[key] = tpl or false
 	end
-	return carTemplates[cm.model] or nil
+	return carTemplates[key] or nil
 end
 
 -- перекраска: только детали, в имени которых есть слово из paint (например "Body")
 local function paintCar(m, cm, color)
-	local src = carFolder:FindFirstChild(cm.model)
+	local src = folderOf(cm):FindFirstChild(cm.model)
 	local key = src and carOpt(cm, src, "paint", "Paint") or cm.paint
 	if type(key) ~= "string" or key == "" then
 		return
@@ -2371,11 +2671,29 @@ do
 		end
 	end
 	print("[CarModels] загружено своих моделей машин: " .. n)
+
+	-- VIP: модели из папки VipCarModels заменяют блочные VIP-машины из конфига
+	local vipList = {}
+	for _, ch in ipairs(vipFolder:GetChildren()) do
+		if ch:IsA("Model") or ch:IsA("Folder") then
+			local cm = { name = ch:GetAttribute("DisplayName") or ch.Name, model = ch.Name, body = ch:GetAttribute("Body") or "sedan", vip = true }
+			if getCarTemplate(cm) then
+				table.insert(vipList, cm)
+			end
+		end
+	end
+	if #vipList > 0 then
+		Config.VipCarModels = vipList
+	end
+	for _, cm in ipairs(Config.VipCarModels or {}) do
+		cm.vip = true
+	end
+	print("[CarModels] VIP-моделей из VipCarModels: " .. #vipList)
 end
 
 -- машина для клиента или улицы: своя модель, если есть, иначе блочная
-local function buildCar(cm, forTraffic)
-	local color = Config.CarColors[math.random(1, #Config.CarColors)]
+local function buildCar(cm, forTraffic, color)
+	color = color or Config.CarColors[math.random(1, #Config.CarColors)]
 	if not (forTraffic and Config.CustomCarsInTraffic == false) then
 		local tpl = getCarTemplate(cm)
 		if tpl then
@@ -2397,7 +2715,7 @@ local STATION_L = {
 	engine_stand = Vector3.new(55, 0, 2),
 	parts_washer = Vector3.new(55, 0, 16),
 }
-local TOOL_SLOTS = { "impact", "torque", "hammer", "scanner", "multimeter", "extractor", "valve_tool", "ring_compressor" }
+local TOOL_SLOTS = { "impact", "torque", "hammer", "scanner", "multimeter", "extractor", "valve_tool", "ring_compressor", "vip_impact" }
 
 -- плита с прямоугольными вырезами (для смотровых ям): mk(sizeX, sizeZ, centerX, centerZ)
 -- holes = { {x1, x2, z1, z2}, ... } — вырезы не должны перекрываться по X
@@ -2983,6 +3301,7 @@ local function buildCity()
 		surfaceText(sign, Enum.NormalId.Front, "🏦 БАНК · КРЕДИТЫ", rgb(255, 255, 255))
 		windows(cx - 15, cx + 15, 19, 19, 6, 6, 3, 2.4)
 		local d = part({ Name = "BankDoor", Size = V(6, 8, 0.4), Position = V(cx, 4, 103.8), Color = rgb(60, 45, 30), Material = Enum.Material.Wood })
+		table.insert(BankDoors, d.Position)
 		local pr = prompt(d, "Кредит без процентов", "Банк", function(p)
 			OpenUIEvent:FireClient(p, "bank")
 		end)
@@ -3210,15 +3529,20 @@ local function driveCar(car, points, speed)
 	end
 end
 
-local function rollFaults(plot)
+local function rollFaults(plot, gearbox)
 	local recent = (plot and plot.recentFaults) or {}
 	local isRecent = {}
 	for _, id in ipairs(recent) do
 		isRecent[id] = true
 	end
-	local pool, backup = {}, {}
+	local pool, backup, boxPool = {}, {}, {}
 	for _, f in ipairs(Config.Faults) do
-		if not f.rare then
+		if f.gearbox then
+			-- коробка: только неисправности своей КПП
+			if f.gearbox == gearbox then
+				table.insert(boxPool, f)
+			end
+		elseif not f.rare and not f.season then
 			if isRecent[f.id] then
 				table.insert(backup, f)
 			else
@@ -3231,6 +3555,9 @@ local function rollFaults(plot)
 	if not isRecent.engine and math.random() < 0.15 then
 		table.insert(list, Config.FaultById.engine)
 		maxN = 1
+	elseif #boxPool > 0 and math.random() < (Config.GearboxFaultChance or 0.35) then
+		table.insert(list, boxPool[math.random(1, #boxPool)])
+		maxN = 2
 	end
 	local n = math.random(1, maxN)
 	for _ = 1, n do
@@ -3389,7 +3716,7 @@ local function snapshot(p, bayIndex)
 				f.stepIdx = fs.stepIdx
 				f.stepCount = #steps
 				if st then
-					local s = { type = st.type, label = st.label, time = st.time }
+					local s = { type = st.type, label = st.label, time = st.time, wait = st.wait }
 					s.atName = "у машины (пост " .. bay.localIdx .. ")"
 					if st.at then
 						s.atName = Config.Stations[st.at]
@@ -3532,6 +3859,9 @@ local function checkCarDone(bay)
 			if rt and rt >= 4.5 then
 				tip = tip * (1 + (Config.StarTipBonus or 0.2))
 			end
+			if job.vip then
+				tip = tip * (Config.VipRewardMult or 1.5)
+			end
 			local bonus = addCash(p, tip, true)
 			sfx(bay.pos, "cash")
 			notify(p, "🚗 " .. job.name .. " готова! Бонус от клиента: +$" .. bonus, "good")
@@ -3555,6 +3885,9 @@ local function completeFault(bay, fs, p, share)
 	local base = rewardOf(fs) * share
 	if fs.greased then
 		base = base * 1.15
+	end
+	if bay.job and bay.job.vip then
+		base = base * (Config.VipRewardMult or 1.5)
 	end
 	base = math.floor(base)
 	if p.Parent and bay.job then
@@ -3665,14 +3998,54 @@ spawnCar = function(plot, opts)
 		end
 		return
 	end
-	local cm = Config.CarModels[math.random(1, #Config.CarModels)]
-	local car = buildCar(cm)
-	local job = { name = cm.name, model = car, faults = {}, earnings = {}, ready = false, tutorial = opts and opts.tutorial or nil, spot = spot, plot = plot }
+	local owner = plot.owner
+	local vip = not (opts and opts.tutorial) and owner and owner:GetAttribute("Pass_vip") and #(Config.VipCarModels or {}) > 0 and math.random() < (Config.VipCarChance or 0.3)
+	local cm, car
+	if vip then
+		cm = Config.VipCarModels[math.random(1, #Config.VipCarModels)]
+		car = buildCar(cm, false, Config.VipCarColors[math.random(1, #Config.VipCarColors)])
+	else
+		cm = Config.CarModels[math.random(1, #Config.CarModels)]
+		car = buildCar(cm)
+	end
+	-- коробка передач (взвешенный случайный выбор)
+	local gearbox = Config.Gearboxes[1]
+	do
+		local total = 0
+		for _, g in ipairs(Config.Gearboxes) do
+			total = total + (g.weight or 1)
+		end
+		local r = math.random() * total
+		for _, g in ipairs(Config.Gearboxes) do
+			r = r - (g.weight or 1)
+			if r <= 0 then
+				gearbox = g
+				break
+			end
+		end
+	end
+	local title = (vip and "⭐ VIP · " or "") .. cm.name .. " · " .. gearbox.name
+	local job = { name = title, model = car, faults = {}, earnings = {}, ready = false, tutorial = opts and opts.tutorial or nil, spot = spot, plot = plot, vip = vip or nil, gearbox = gearbox.id }
 	spot.job = job
 	if job.tutorial then
 		plot.tutJob = job
 	end
-	local list = job.tutorial and { Config.FaultById.oil } or rollFaults(plot)
+	local list = job.tutorial and { Config.FaultById.oil } or rollFaults(plot, gearbox.id)
+	-- сезонная переобувка
+	if not job.tutorial then
+		local swap = nil
+		if World.season == "winter" then
+			swap = Config.FaultById.winter_tires
+		elseif (World.summerSwapLeft or 0) > 0 then
+			swap = Config.FaultById.summer_tires
+		end
+		if swap and math.random() < (Config.TireSwapChance or 0.55) then
+			table.insert(list, 1, swap)
+			while #list > 3 do
+				table.remove(list)
+			end
+		end
+	end
 	for _, def in ipairs(list) do
 		table.insert(job.faults, { def = def, revealed = not def.hidden, done = false, stepIdx = 0, busyUntil = 0, bayIndex = 0, forceRust = opts and opts.forceRust or nil })
 	end
@@ -3935,6 +4308,34 @@ local function handleBolt(p, fs, arg)
 		end
 	end
 
+	-- VIP-гайковёрт: все болты шага разом (кроме сорванных — их выкручивают экстрактором)
+	if method == "vip" then
+		if not owns(p, "vip_impact") then
+			notify(p, "⭐ VIP-гайковёрт есть только у владельцев VIP-пасса (Компьютер → Донат)", "bad")
+			return
+		end
+		local n = 0
+		for _, s in pairs(fs.bolts) do
+			if s ~= "done" and s ~= "broken" then
+				n = n + 1
+			end
+		end
+		if n == 0 then
+			notify(p, "Остались только сорванные болты 💥 — выкрутите их по одному", "info")
+			return
+		end
+		sfx(bpos(fs), "impact")
+		busy(fs, 1.5, "⭐ VIP-гайковёрт: откручиваем все болты разом (" .. n .. " шт.)...", function()
+			for i, s in pairs(fs.bolts) do
+				if s ~= "broken" then
+					fs.bolts[i] = "done"
+				end
+			end
+			after()
+		end)
+		return
+	end
+
 	if method == "wd40" then
 		if state ~= "rusty" then
 			notify(p, "WD-40 нужен только для ржавых болтов 🟤", "info")
@@ -4033,7 +4434,11 @@ local function handleStep(p, fs, st, arg)
 			end
 		end
 		sfx(bpos(fs), st.sound or (st.tighten and "wrench") or "action")
-		busy(fs, st.time or 2, st.label .. "...", function()
+		local lbl = st.wait and ("⏳ " .. st.label .. " — можно пока заняться другой машиной") or (st.label .. "...")
+		busy(fs, st.time or 2, lbl, function()
+			if st.wait and p.Parent then
+				notify(p, "⏳ Готово: «" .. st.label .. "» (пост " .. (Bays[fs.bayIndex] and Bays[fs.bayIndex].localIdx or "?") .. ")", "info")
+			end
 			advance(fs, p)
 		end)
 	elseif st.type == "torque" then
@@ -4462,6 +4867,7 @@ local function grantPass(p, key)
 	elseif key == "vip" then
 		applyVipTag(p)
 		Hooks.refreshSigns(p)
+		p:SetAttribute("Own_vip_impact", true)
 	elseif key == "extra_lift" then
 		local pl = plotOf(p)
 		if pl then
@@ -4592,6 +4998,9 @@ ShopFunction.OnServerInvoke = function(p, action, id, qty)
 			end)
 			return true, "Заказ оформлен: " .. it.name .. " x" .. n .. ". Доставка через " .. Config.DeliveryTime .. " сек."
 		else
+			if it.vip then
+				return false, "⭐ Выдаётся вместе с VIP-пассом (вкладка «Донат»)"
+			end
 			if owns(p, id) then
 				return false, "Уже куплено"
 			end
@@ -4718,7 +5127,7 @@ local function save(p)
 			if n > 0 then
 				data.inv[it.id] = n
 			end
-		elseif owns(p, it.id) then
+		elseif owns(p, it.id) and not it.vip then
 			data.own[it.id] = true
 		end
 	end
@@ -4865,11 +5274,23 @@ for i, s in ipairs(Config.Tutorial) do
 end
 local TUT_CAR = { tutorial = true, forceRust = true, spot = 1 }
 
+-- сколько стоят запчасти на первый ремонт (масло + фильтр)
+local function tutPartsCost()
+	local sum = 0
+	for _, st in ipairs(Config.FaultById.oil.steps) do
+		for id, n in pairs(st.items or {}) do
+			sum = sum + (Config.ItemById[id] and Config.ItemById[id].price or 0) * n
+		end
+	end
+	return sum
+end
+
 local Dialog1 = {
 	"Ну здравствуй, новый хозяин! Сорок лет я тут гайки крутил...",
-	"Мастерская старая, да крепкая. За стеклом — бокс на три поста, тут — холл для клиентов.",
+	"Мастерская старая, да крепкая. За стеклом — бокс на четыре поста, тут — холл для клиентов.",
 	"Инструмент я весь распродал, уж не серчай. Зато компьютер на стойке работает.",
 	"Закажи моторное масло (вкладка «Тех. жидкости») и масляный фильтр. Первый клиент уже звонил — ему масло поменять. Менять будем из ямы на первом посту — домкрат не нужен.",
+	"Только вот денег у тебя — кот наплакал, на запчасти не хватит. Не беда: выйди на улицу, найди 🏦 БАНК и возьми кредит $150. Процентов там нет — отдашь, когда клиенты заплатят.",
 }
 local Dialog2 = {
 	"Вот это я понимаю! Руки из нужного места растут.",
@@ -4882,6 +5303,14 @@ local function tutTarget(plot, id)
 		return plot.L(0, 5, 44)
 	elseif id == "buy" or id == "wait" then
 		return plot.computerPos + Vector3.new(-3, 6, 0)
+	elseif id == "bank" then
+		local best
+		for _, pos in ipairs(BankDoors) do
+			if not best or (pos - plot.origin).Magnitude < (best - plot.origin).Magnitude then
+				best = pos
+			end
+		end
+		return best and (best + Vector3.new(0, 6, 2)) or nil
 	elseif id == "car" then
 		return plot.parking[1].pos + Vector3.new(0, 6, 0)
 	elseif id == "repair" then
@@ -4934,7 +5363,7 @@ onMentorTalk = function(p)
 	end
 	if d.tutStage == "talk1" then
 		StoryEvent:FireClient(p, "dialog", { speaker = Config.MentorName, lines = Dialog1 })
-		setTut(p, "buy")
+		setTut(p, getCash(p) < tutPartsCost() and "bank" or "buy")
 	elseif d.tutStage == "talk2" or d.tutStage == "name" then
 		StoryEvent:FireClient(p, "dialog", { speaker = Config.MentorName, lines = Dialog2, after = "name" })
 		setTut(p, "name")
@@ -4979,6 +5408,10 @@ task.spawn(function()
 		task.wait(1)
 		for p, d in pairs(PD) do
 			local plot = plotOf(p)
+			if plot and d.loaded and not d.tut and d.tutStage == "bank" and getCash(p) >= tutPartsCost() then
+				setTut(p, "buy")
+				notify(p, "🏦 Деньги есть! Теперь к компьютеру на стойке — закажите масло и фильтр.", "good")
+			end
 			if plot and d.loaded and not d.tut and (d.tutStage == "buy" or d.tutStage == "wait") then
 				local hasTools = true -- замена масла идёт из ямы, домкрат и стойки не нужны
 				local hasParts = true
@@ -5178,6 +5611,9 @@ local function onPlayerAdded(p)
 			end
 		end
 	end
+	if p:GetAttribute("Pass_vip") then
+		p:SetAttribute("Own_vip_impact", true)
+	end
 	Hooks.refreshSigns(p)
 
 	p.CharacterAdded:Connect(function(char)
@@ -5217,6 +5653,46 @@ for k = 1, Config.MaxPlots do
 	refreshEquipment(buildPlot(k))
 end
 
+-- СЕЗОНЫ: зимой земля под снегом, идёт снег, клиенты едут на зимнюю резину; после таяния — на летнюю
+local groundLook = {}
+for _, d in ipairs(world:GetDescendants()) do
+	if d:IsA("BasePart") and d.Name == "Ground" then
+		groundLook[d] = { d.Color, d.Material }
+	end
+end
+local function setSeason(season)
+	local first = World.seasonLeft == 0 and season == "summer"
+	World.season = season
+	World.seasonLeft = season == "winter" and (Config.WinterDays or 3) or (Config.SummerDays or 3)
+	workspace:SetAttribute("Season", season)
+	for part, look in pairs(groundLook) do
+		if season == "winter" then
+			part.Color = Color3.fromRGB(235, 240, 245)
+			part.Material = Enum.Material.Snow
+		else
+			part.Color = look[1]
+			part.Material = look[2]
+		end
+	end
+	if first then
+		return
+	end
+	local msg
+	if season == "winter" then
+		World.weather = "snow"
+		msg = "❄ Пришла зима! Выпал снег — клиенты поедут переобуваться на ЗИМНЮЮ резину. Закажите зимние шины (Компьютер → Запчасти)."
+	else
+		World.weather = "clear"
+		World.summerSwapLeft = Config.SummerSwapDays or 1
+		msg = "🌱 Снег растаял! Клиенты поедут переобуваться обратно на ЛЕТНЮЮ резину. Закажите летние шины."
+	end
+	workspace:SetAttribute("Weather", World.weather)
+	for _, p in ipairs(Players:GetPlayers()) do
+		notify(p, msg, "info")
+	end
+end
+setSeason("summer")
+
 -- время суток, погода и подарки дня (игрок не может обанкротиться)
 task.spawn(function()
 	local dayLen = Config.DayLength or 720
@@ -5242,6 +5718,11 @@ task.spawn(function()
 		World.clock = (World.clock + dt * 24 / dayLen) % 24
 		if World.clock < prev then
 			World.day = World.day + 1
+			World.summerSwapLeft = math.max(0, (World.summerSwapLeft or 0) - 1)
+			World.seasonLeft = World.seasonLeft - 1
+			if World.seasonLeft <= 0 then
+				setSeason(World.season == "winter" and "summer" or "winter")
+			end
 		end
 		Lighting.ClockTime = World.clock
 		local isNight = World.clock >= (Config.NightStart or 21) or World.clock < (Config.NightEnd or 6)
@@ -5255,7 +5736,11 @@ task.spawn(function()
 		if now >= nextWeather then
 			nextWeather = nextW()
 			local r = math.random()
-			World.weather = (r < 0.5 and "clear") or (r < 0.75 and "cloudy") or "rain"
+			if World.season == "winter" then
+				World.weather = (r < 0.65 and "snow") or (r < 0.85 and "cloudy") or "clear"
+			else
+				World.weather = (r < 0.5 and "clear") or (r < 0.75 and "cloudy") or "rain"
+			end
 			workspace:SetAttribute("Weather", World.weather)
 			if atm then
 				local add = (World.weather == "rain" and 0.2) or (World.weather == "cloudy" and 0.1) or 0
@@ -5263,7 +5748,7 @@ task.spawn(function()
 				atm.Haze = baseHaze + add * 8
 			end
 		end
-		Lighting.Brightness = isNight and 1 or ((World.weather == "rain" and 1.7) or (World.weather == "cloudy" and 2.1) or 2.6)
+		Lighting.Brightness = isNight and 1 or ((World.weather == "rain" and 1.7) or ((World.weather == "cloudy" or World.weather == "snow") and 2.1) or 2.6)
 		workspace:SetAttribute("Clock", World.clock)
 		workspace:SetAttribute("Day", World.day)
 		workspace:SetAttribute("Night", isNight)
@@ -5868,6 +6353,7 @@ local TABS = {
 	{ id = "tool", name = "Инструменты" },
 	{ id = "equip", name = "Оборудование" },
 	{ id = "staff", name = "Персонал" },
+	{ id = "trans", name = "⚙ КПП" },
 	{ id = "donate", name = "⭐ Донат" },
 }
 local currentTab = "part"
@@ -5875,7 +6361,7 @@ local tabButtons = {}
 local renderComputer
 
 for i, t in ipairs(TABS) do
-	local b = button(tabsRow, t.name, COLORS.gray, 96, 32, function()
+	local b = button(tabsRow, t.name, COLORS.gray, 82, 32, function()
 		currentTab = t.id
 		renderComputer()
 	end)
@@ -5904,7 +6390,16 @@ local function itemRow(it)
 			shop("buy", it.id, 5)
 		end)
 	else
-		if owns(it.id) then
+		if it.vip then
+			if owns(it.id) then
+				button(r, "✔ Есть (VIP)", COLORS.good, 140, 30)
+			else
+				button(r, "⭐ Только с VIP-пассом", COLORS.warn, 200, 30, function()
+					currentTab = "donate"
+					renderComputer()
+				end)
+			end
+		elseif owns(it.id) then
 			button(r, "✔ Куплено", COLORS.good, 140, 30)
 		else
 			button(r, "Купить за $" .. it.price, COLORS.btn, 160, 30, function()
@@ -5927,7 +6422,7 @@ renderComputer = function()
 	end
 	local y = compBody.CanvasPosition
 	clear(compBody)
-	if currentTab == "part" or currentTab == "fluid" then
+	if currentTab == "part" or currentTab == "fluid" or currentTab == "trans" then
 		local note = "🚚 Доставка заказа: " .. Config.DeliveryTime .. " сек. Администратор заказывает мгновенно и на 10% дешевле."
 		if player:GetAttribute("Hire_admin") then
 			note = "🧑‍💼 Администратор на месте: доставка мгновенная, скидка 10%."
@@ -5989,7 +6484,8 @@ renderComputer = function()
 		end
 	else
 		for _, it in ipairs(Config.Items) do
-			if it.cat == currentTab then
+			local match = (currentTab == "trans") and (it.group == "trans") or (it.cat == currentTab and it.group ~= "trans")
+			if match then
 				itemRow(it)
 			end
 		end
@@ -6114,12 +6610,15 @@ local function renderStep(c, f)
 			{ id = "wd40", name = "🧴 WD-40 (" .. inv("wd40") .. ")" },
 			{ id = "hammer", name = "🔨 Молоток" },
 		}
+		if owns("vip_impact") then
+			table.insert(defs, 1, { id = "vip", name = "⭐ VIP: все разом" })
+		end
 		for i, m in ipairs(defs) do
 			local col = COLORS.gray
 			if boltMode == m.id then
 				col = COLORS.btn
 			end
-			local b = button(modes, m.name, col, 128, 30, function()
+			local b = button(modes, m.name, col, (#defs > 3) and 93 or 128, 30, function()
 				boltMode = m.id
 				renderJob()
 			end)
@@ -6136,8 +6635,11 @@ local function renderStep(c, f)
 		end
 		label(c, "🔩 обычный  🟤 ржавый (может сорваться, 15%)  💧 обработан  💥 сорван — нужен экстрактор", 12, COLORS.dim, 16)
 	elseif st.type == "action" then
+		if st.wait then
+			label(c, "⏳ Этот шаг идёт сам (" .. math.floor((st.time or 0) / 60) .. " мин " .. math.floor((st.time or 0) % 60) .. " сек). Запустите и занимайтесь другой машиной — придёт уведомление.", 12, COLORS.dim, 16)
+		end
 		local r = row(c, 34)
-		button(r, "▶ " .. st.label, COLORS.good, 300, 32, function()
+		button(r, (st.wait and "⏳ " or "▶ ") .. st.label, COLORS.good, 300, 32, function()
 			act("do", f.idx)
 		end)
 	elseif st.type == "torque" then
@@ -6587,7 +7089,7 @@ local clockLbl = new("TextLabel", { Parent = gui, BackgroundColor3 = COLORS.bg, 
 corner(clockLbl, 8)
 local musicBtn = button(gui, "🎵 Музыка: вкл", COLORS.gray, 160, 28)
 musicBtn.Position = UDim2.new(1, -172, 0, 46)
-local WEATHER = { clear = "☀ Ясно", cloudy = "☁ Облачно", rain = "🌧 Дождь" }
+local WEATHER = { clear = "☀ Ясно", cloudy = "☁ Облачно", rain = "🌧 Дождь", snow = "❄ Снег" }
 
 local music = Instance.new("Sound")
 music.Name = "BackgroundMusic"
@@ -6653,6 +7155,20 @@ rainSnd.SoundId = Config.RainSound or ""
 rainSnd.Parent = SoundService
 
 local isRaining = false
+local isSnowing = false
+-- снег: крупные медленные хлопья
+local snow = Instance.new("ParticleEmitter")
+snow.Color = ColorSequence.new(Color3.fromRGB(250, 250, 255))
+snow.LightEmission = 0.3
+snow.Transparency = NumberSequence.new(0.1)
+snow.Size = NumberSequence.new(0.35)
+snow.Lifetime = NumberRange.new(5, 7)
+snow.Speed = NumberRange.new(8, 12)
+snow.RotSpeed = NumberRange.new(-60, 60)
+snow.SpreadAngle = Vector2.new(25, 25)
+snow.EmissionDirection = Enum.NormalId.Bottom
+snow.Rate = 0
+snow.Parent = rainPart
 local rainParams = RaycastParams.new()
 rainParams.FilterType = Enum.RaycastFilterType.Exclude
 RunService.RenderStepped:Connect(function()
@@ -6669,6 +7185,7 @@ RunService.RenderStepped:Connect(function()
 		local hit = workspace:Raycast(pos, Vector3.new(0, 80, 0), rainParams)
 		local underRoof = hit ~= nil and hit.Instance.Transparency < 0.9
 		rain.Rate = (isRaining and not underRoof) and 900 or 0
+		snow.Rate = (isSnowing and not underRoof) and 350 or 0
 		rainSnd.Volume = underRoof and 0.12 or 0.35
 	end
 end)
@@ -6679,9 +7196,11 @@ task.spawn(function()
 		local h = math.floor(clk)
 		local m = math.floor((clk - h) * 60)
 		local w = workspace:GetAttribute("Weather") or "clear"
+		local season = workspace:GetAttribute("Season") == "winter" and " · ❄ зима" or ""
 		local night = workspace:GetAttribute("Night")
-		clockLbl.Text = string.format("%s %02d:%02d · день %d · %s", night and "🌙" or "🕗", h, m, workspace:GetAttribute("Day") or 1, WEATHER[w] or w)
+		clockLbl.Text = string.format("%s %02d:%02d · день %d · %s%s", night and "🌙" or "🕗", h, m, workspace:GetAttribute("Day") or 1, WEATHER[w] or w, season)
 		local raining = (w == "rain")
+		isSnowing = (w == "snow")
 		isRaining = raining
 		if raining and rainSnd.SoundId ~= "" and not rainSnd.IsPlaying then
 			rainSnd:Play()
